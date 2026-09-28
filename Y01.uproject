@@ -1,0 +1,32 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "{0E04C119-4735-9844-628A-FD83BCB5FC37}",
+	"Category": "",
+	"Description": "",
+	"Modules": [
+		{
+			"Name": "Y01",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "Y01Tests",
+			"Type": "Runtime",
+			"LoadingPhase": "PostDefault",
+			"TargetConfigurationAllowList": [ "Debug", "DebugGame", "Development" ]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "GameplayAbilities",
+			"Enabled": true
+		},
+		{
+			"Name": "ModelingToolsEditorMode",
+			"Enabled": true,
+			"TargetAllowList": [
+				"Editor"
+			]
+		}
+	]
+}

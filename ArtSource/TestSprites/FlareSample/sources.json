@@ -1,0 +1,92 @@
+{
+  "retrieved_utc": "2026-09-24T07:49:34.360017+00:00",
+  "files": [
+    {
+      "file": "Original/isometric_hero.zip",
+      "url": "https://opengameart.org/sites/default/files/isometric_hero.zip",
+      "bytes": 6152847,
+      "sha256": "5379df45ac9bca136a239525459708c981776986bb8da4f4aa3f350a9974d3b7"
+    },
+    {
+      "file": "Original/Skeleton/skeleton_0.png",
+      "url": "https://opengameart.org/sites/default/files/skeleton_0.png",
+      "bytes": 1990277,
+      "sha256": "6c1fd9a6a514d3319d89edcd6205d212ace3676b42c575e513b2085b16c52f86"
+    },
+    {
+      "file": "Evidence/hero_page.html",
+      "url": "https://opengameart.org/content/isometric-hero-and-heroine",
+      "bytes": 68020,
+      "sha256": "ac5bfaac0e4a1f808b3b947572de963e1f3f2f8ef7e7feb96325f324442ce923"
+    },
+    {
+      "file": "Evidence/skeleton_page.html",
+      "url": "https://opengameart.org/content/skeleton-warrior-0",
+      "bytes": 32837,
+      "sha256": "a8aed4c575c04c7e690e02c23bafa1daa89485cdd5a8e35db01986950c16eb0c"
+    },
+    {
+      "file": "Evidence/misha_page.html",
+      "url": "https://opengameart.org/content/bastardsword001-concept",
+      "bytes": 33147,
+      "sha256": "6c98305324fdf9d431aa0694aa0714b5ec1a408b7de20efd2a0b7e257156d6ba"
+    },
+    {
+      "file": "Evidence/cc-by-3.0.html",
+      "url": "https://creativecommons.org/licenses/by/3.0/",
+      "bytes": 32052,
+      "sha256": "655c0b9134ce2be63356976cf1f8a5ab2ca6f4f32acf280ea01604ebe9a1b0b8"
+    },
+    {
+      "file": "Evidence/cc-by-3.0-legalcode.html",
+      "url": "https://creativecommons.org/licenses/by/3.0/legalcode",
+      "bytes": 51333,
+      "sha256": "1575ec5fc503cb90e64fc44656704698266747597fe45ca56b0f38d7dfbec782"
+    },
+    {
+      "file": "Evidence/hero_v014.txt",
+      "url": "https://raw.githubusercontent.com/clintbellanger/flare-game/v0.14/animations/hero.txt",
+      "bytes": 523,
+      "sha256": "f4e47f0707c7b772eca1c7952c0e8d65b0d0931676e83e0517db129c41cef653"
+    },
+    {
+      "file": "Evidence/skeleton_v014.txt",
+      "url": "https://raw.githubusercontent.com/clintbellanger/flare-game/v0.14/animations/skeleton.txt",
+      "bytes": 586,
+      "sha256": "c22bbc19c06b4f82f592dc3b4607be5a10e529153ca8f743f201441ae6b00b8a"
+    },
+    {
+      "file": "Original/Hero/steel_armor.png",
+      "archive_member": "isometric_hero/steel_armor.png",
+      "sha256": "4bb2fe321d50257cc1aea21a7ec8cf6e9f16a9564179f0b852043784148ee0bf",
+      "bytes": 960804,
+      "reference_url": "https://raw.githubusercontent.com/clintbellanger/flare-game/v0.14/art/characters/hero/steel_armor.png",
+      "reference_bytes_equal": true
+    },
+    {
+      "file": "Original/Hero/male_head1.png",
+      "archive_member": "isometric_hero/male_head1.png",
+      "sha256": "27a6c1990d8d612e0949e7d67f86843f9e72bc269495020f98078d632b3c1169",
+      "bytes": 160629,
+      "reference_url": "https://raw.githubusercontent.com/clintbellanger/flare-game/v0.14/art/characters/hero/male_head1.png",
+      "reference_bytes_equal": true
+    },
+    {
+      "file": "Original/Hero/longsword.png",
+      "archive_member": "isometric_hero/longsword.png",
+      "sha256": "35ab0fcd21f484efe07c0869239c10ae9713fb25997a3db80fcd66e811bd5aa6",
+      "bytes": 250198,
+      "reference_url": "https://raw.githubusercontent.com/clintbellanger/flare-game/v0.14/art/characters/hero/longsword.png",
+      "reference_bytes_equal": true
+    },
+    {
+      "file": "Original/Hero/shield.png",
+      "archive_member": "isometric_hero/shield.png",
+      "sha256": "149c260524997e84aa24d14e44ccf21804a1858f6bda2cc4923a6b194d0417d0",
+      "bytes": 258891,
+      "reference_url": "https://raw.githubusercontent.com/clintbellanger/flare-game/v0.14/art/characters/hero/shield.png",
+      "reference_bytes_equal": true
+    }
+  ],
+  "status": "original_images_only_not_imported_not_ue_verified"
+}

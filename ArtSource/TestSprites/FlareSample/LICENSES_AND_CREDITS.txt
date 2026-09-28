@@ -1,0 +1,60 @@
+Y01 / FlareSample 美术来源与署名
+
+适用范围
+本说明针对以下 OpenGameArt 具体发布包中的美术图片。不得将声明推广到全部 Flare 资源，也不将 Flare 引擎 GPL 当作美术许可。网页快照和旧版动画定义仅作为来源证据保留，不重新许可其中的第三方内容。
+
+1. Isometric Hero and Heroine
+作者：Clint Bellanger
+发布页：https://opengameart.org/content/isometric-hero-and-heroine
+原包：https://opengameart.org/sites/default/files/isometric_hero.zip
+本小样选用：steel_armor.png、male_head1.png、longsword.png、shield.png。
+具体发布页许可：CC BY 3.0。
+作者在该页面的澄清原文：
+“All of these specific files are CC-BY licensed to match this OpenGameArt upload. Note that some other characters in Flare-Game may be CC-BY-SA and do not apply to my message here.”
+
+Additional Credits 原文完整保留：
+Distressed Leather (used in Leather Armor) by D. Sharon Pruitt (CC-BY)
+http://www.flickr.com/photos/pinksherbet/3005071597/
+A few weapons loosely inspired by Naraphim (CC-BY-SA)
+http://naraphim.deviantart.com/art/Weapon-Set-Complete-2007-73660253
+
+边界：本小样使用钢甲，不使用明确标为皮甲的纹理。发布页未说明长剑是否属于受 Naraphim 启发的武器，也未注明该附加 SA 许可的版本；本交付没有删除这项署名或作扩大法律推断。这里依据作者对这次具体上传文件的 CC-BY 声明使用，并完整保留附加来源；如正式商用发行需要排除其法律歧义，应再向作者取得针对所选武器的书面确认。
+
+2. Skeleton Warrior
+作者：Clint Bellanger
+发布页：https://opengameart.org/content/skeleton-warrior-0
+原图：https://opengameart.org/sites/default/files/skeleton_0.png
+具体发布页许可：CC BY 3.0。
+正文原始来源：
+Rendered in Blender: http://opengameart.org/content/skeleton-warrior
+Sword based on the concept sketch by Misha:
+http://opengameart.org/content/bastardsword001-concept
+Misha 概念稿发布页同样列 CC BY 3.0，保留其署名。
+
+3. 许可证与使用边界
+许可证：https://creativecommons.org/licenses/by/3.0/
+完整文本：https://creativecommons.org/licenses/by/3.0/legalcode
+允许在遵守条件的前提下复制、修改、商用及再分发。保留作者、作品来源、许可证链接、适用的附加署名与修改说明；不得暗示原作者认可本项目，不得增加妨碍接收者行使许可权利的法律或有效技术限制。CC BY 3.0 本身没有 ShareAlike 条件。
+本文件是工程记录，不构成法律意见；正式发行仍应依据保留的完整条款履行义务。
+
+可用于项目署名页的基础文本（连同上述附加来源保留）：
+角色与骷髅美术：Clint Bellanger，Isometric Hero and Heroine / Skeleton Warrior，CC BY 3.0。
+骷髅剑概念：Misha，Bastardsword001 concept，CC BY 3.0。
+英雄包附加来源：D. Sharon Pruitt（皮甲纹理，CC-BY，本小样未选该纹理）；Naraphim（部分武器概念灵感，CC-BY-SA，具体版本及对应武器未列明）。
+来源及许可链接见本文件对应条目。
+
+4. 本小样修改说明
+- Original 下原 ZIP 与选定 PNG 保持下载字节不变。
+- 将英雄钢甲、头部、长剑、盾牌按官方 v0.14 的逐朝向合成顺序做 RGBA 合成。
+- 根据官方旧版定义提取待机、移动、攻击、受击、死亡动作列，保留 128×128 画布、原生八方向及源帧，不补帧、不镜像、不缩放、不裁掉透明边、不重画。
+- 骷髅源 PNG 为每通道 16 位；Prepared 转为 RGBA8。其 RGBA8 像素与官方 v0.14 原图一致；没有改变原始文件。
+- 另制棋盘背景、文字、锚点十字和最近邻放大的离线 PNG/GIF 预览；这些标记不写入 Prepared 资源图。
+- GIF 使用 Flare v0.14 时序作为小样参考；原发布包没有标明 FPS，不能称为原包帧率。
+
+5. 可复核证据
+Evidence/hero_page.html、skeleton_page.html、misha_page.html：下载时的官方发布页快照。
+Evidence/cc-by-3.0.html、cc-by-3.0-legalcode.html：许可证网页与完整文本。
+Evidence/hero_v014.txt、skeleton_v014.txt：官方旧版动作定义参考。
+sources.json：各来源 URL、下载 UTC 时间、字节数、SHA-256 及英雄四层与官方旧图的字节一致性。
+manifest.json：每个输出动作的帧序、时序、锚点及未导入/未验证状态。
+inventory.json：交付目录逐文件哈希。

@@ -1,0 +1,743 @@
+{
+  "status": "original_and_prepared_images_only",
+  "frame_size": [
+    128,
+    128
+  ],
+  "directions": [
+    "W",
+    "NW",
+    "N",
+    "NE",
+    "E",
+    "SE",
+    "S",
+    "SW"
+  ],
+  "ue_imported": false,
+  "ue_verified": false,
+  "source_release_fps": null,
+  "modifications": [
+    "英雄按方向合成四层",
+    "按动作抽取列，不缩放、不裁掉透明边",
+    "骷髅 PNG 转换为 RGBA8，像素值与官方 v0.14 原图一致",
+    "另制带标签的离线预览"
+  ],
+  "prepared": [
+    {
+      "file": "Prepared/Hero/Hero_Idle_8Directions.png",
+      "actor": "Hero",
+      "action": "Idle",
+      "image_size": [
+        512,
+        1024
+      ],
+      "frame_size": [
+        128,
+        128
+      ],
+      "directions": [
+        "W",
+        "NW",
+        "N",
+        "NE",
+        "E",
+        "SE",
+        "S",
+        "SW"
+      ],
+      "source_columns_zero_based": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "source_frames_per_direction": 4,
+      "pivot_pixel_from_top_left": [
+        64,
+        96
+      ],
+      "pivot_normalized": [
+        0.5,
+        0.75
+      ],
+      "source_release_fps": null,
+      "preview_reference_ms_per_frame": 180,
+      "preview_reference_fps": 5.555555555555555,
+      "timing_basis": "官方 Flare v0.14 动画定义，仅作小样参考，不是原包声明的 FPS",
+      "source_frame_order": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "preview_order": [
+        0,
+        1,
+        2,
+        3,
+        2,
+        1
+      ],
+      "preview_pause_after_once_ms": 0,
+      "preview_loop_is_demonstration_only": true,
+      "rgba_sha256": "bf9bcdc4867b431acfe0a0e81dfb6f180826220f4f07d67ddb0c632b1b75605d",
+      "file_sha256": "f0303b91ef9ea9ae5c155a6a5f18c50a3722bd732b175153499684e7d6339930",
+      "ue_imported": false,
+      "ue_verified": false
+    },
+    {
+      "file": "Prepared/Hero/Hero_Move_8Directions.png",
+      "actor": "Hero",
+      "action": "Move",
+      "image_size": [
+        1024,
+        1024
+      ],
+      "frame_size": [
+        128,
+        128
+      ],
+      "directions": [
+        "W",
+        "NW",
+        "N",
+        "NE",
+        "E",
+        "SE",
+        "S",
+        "SW"
+      ],
+      "source_columns_zero_based": [
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "source_frames_per_direction": 8,
+      "pivot_pixel_from_top_left": [
+        64,
+        96
+      ],
+      "pivot_normalized": [
+        0.5,
+        0.75
+      ],
+      "source_release_fps": null,
+      "preview_reference_ms_per_frame": 60,
+      "preview_reference_fps": 16.666666666666668,
+      "timing_basis": "官方 Flare v0.14 动画定义，仅作小样参考，不是原包声明的 FPS",
+      "source_frame_order": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "preview_order": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "preview_pause_after_once_ms": 0,
+      "preview_loop_is_demonstration_only": true,
+      "rgba_sha256": "1b82ce827e9f8e2465f59afb7f59739cfb94b270d8a58b883ead17eeadfa74b5",
+      "file_sha256": "8e3ff9ee2c763a682997a071ffab9df53d76cca980f561e4cad47fa61bb71968",
+      "ue_imported": false,
+      "ue_verified": false
+    },
+    {
+      "file": "Prepared/Hero/Hero_Attack_8Directions.png",
+      "actor": "Hero",
+      "action": "Attack",
+      "image_size": [
+        512,
+        1024
+      ],
+      "frame_size": [
+        128,
+        128
+      ],
+      "directions": [
+        "W",
+        "NW",
+        "N",
+        "NE",
+        "E",
+        "SE",
+        "S",
+        "SW"
+      ],
+      "source_columns_zero_based": [
+        12,
+        13,
+        14,
+        15
+      ],
+      "source_frames_per_direction": 4,
+      "pivot_pixel_from_top_left": [
+        64,
+        96
+      ],
+      "pivot_normalized": [
+        0.5,
+        0.75
+      ],
+      "source_release_fps": null,
+      "preview_reference_ms_per_frame": 90,
+      "preview_reference_fps": 11.11111111111111,
+      "timing_basis": "官方 Flare v0.14 动画定义，仅作小样参考，不是原包声明的 FPS",
+      "source_frame_order": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "preview_order": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "preview_pause_after_once_ms": 600,
+      "preview_loop_is_demonstration_only": true,
+      "rgba_sha256": "73c3864d7cd88aa673c97e85e62456e6aa51a0cfea551db382f7b4001f3f0be7",
+      "file_sha256": "d74b4292bb50a52b1939b42e63d0c54073c8dda23b465d38b79e2013eef095fc",
+      "ue_imported": false,
+      "ue_verified": false
+    },
+    {
+      "file": "Prepared/Hero/Hero_Hit_8Directions.png",
+      "actor": "Hero",
+      "action": "Hit",
+      "image_size": [
+        256,
+        1024
+      ],
+      "frame_size": [
+        128,
+        128
+      ],
+      "directions": [
+        "W",
+        "NW",
+        "N",
+        "NE",
+        "E",
+        "SE",
+        "S",
+        "SW"
+      ],
+      "source_columns_zero_based": [
+        18,
+        19
+      ],
+      "source_frames_per_direction": 2,
+      "pivot_pixel_from_top_left": [
+        64,
+        96
+      ],
+      "pivot_normalized": [
+        0.5,
+        0.75
+      ],
+      "source_release_fps": null,
+      "preview_reference_ms_per_frame": 60,
+      "preview_reference_fps": 16.666666666666668,
+      "timing_basis": "官方 Flare v0.14 动画定义，仅作小样参考，不是原包声明的 FPS",
+      "source_frame_order": [
+        0,
+        1
+      ],
+      "preview_order": [
+        0,
+        1
+      ],
+      "preview_pause_after_once_ms": 600,
+      "preview_loop_is_demonstration_only": true,
+      "rgba_sha256": "30f145e0248c438d34da47cb43dfcd4acfbcda7e46506ae459e46da4c0e3944e",
+      "file_sha256": "dc2970e6ca7f7a0745c3bd039914b040edc308cdd4b5fd21a99250159ba0ddce",
+      "ue_imported": false,
+      "ue_verified": false
+    },
+    {
+      "file": "Prepared/Hero/Hero_Die_8Directions.png",
+      "actor": "Hero",
+      "action": "Die",
+      "image_size": [
+        768,
+        1024
+      ],
+      "frame_size": [
+        128,
+        128
+      ],
+      "directions": [
+        "W",
+        "NW",
+        "N",
+        "NE",
+        "E",
+        "SE",
+        "S",
+        "SW"
+      ],
+      "source_columns_zero_based": [
+        18,
+        19,
+        20,
+        21,
+        22,
+        23
+      ],
+      "source_frames_per_direction": 6,
+      "pivot_pixel_from_top_left": [
+        64,
+        96
+      ],
+      "pivot_normalized": [
+        0.5,
+        0.75
+      ],
+      "source_release_fps": null,
+      "preview_reference_ms_per_frame": 120,
+      "preview_reference_fps": 8.333333333333334,
+      "timing_basis": "官方 Flare v0.14 动画定义，仅作小样参考，不是原包声明的 FPS",
+      "source_frame_order": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "preview_order": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "preview_pause_after_once_ms": 600,
+      "preview_loop_is_demonstration_only": true,
+      "rgba_sha256": "09c76bf78ca13de25abb134f747be09b18ac0aff781d3e0c12ce68ecba5b2b1a",
+      "file_sha256": "fd7bdc646b1181bc4f02f03151ed95ae3b450045902d9d0b35106061ab7f2184",
+      "ue_imported": false,
+      "ue_verified": false
+    },
+    {
+      "file": "Prepared/Skeleton/Skeleton_Idle_8Directions.png",
+      "actor": "Skeleton",
+      "action": "Idle",
+      "image_size": [
+        512,
+        1024
+      ],
+      "frame_size": [
+        128,
+        128
+      ],
+      "directions": [
+        "W",
+        "NW",
+        "N",
+        "NE",
+        "E",
+        "SE",
+        "S",
+        "SW"
+      ],
+      "source_columns_zero_based": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "source_frames_per_direction": 4,
+      "pivot_pixel_from_top_left": [
+        64,
+        96
+      ],
+      "pivot_normalized": [
+        0.5,
+        0.75
+      ],
+      "source_release_fps": null,
+      "preview_reference_ms_per_frame": 120,
+      "preview_reference_fps": 8.333333333333334,
+      "timing_basis": "官方 Flare v0.14 动画定义，仅作小样参考，不是原包声明的 FPS",
+      "source_frame_order": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "preview_order": [
+        0,
+        1,
+        2,
+        3,
+        2,
+        1
+      ],
+      "preview_pause_after_once_ms": 0,
+      "preview_loop_is_demonstration_only": true,
+      "rgba_sha256": "34c0a46d145b546e88c668278ff60c69ee3dcad188b5d81339cf5c66e6ff501f",
+      "file_sha256": "1ade973979feed5b47013671a210ab14481cfc872027cedf37a9dd4b2ad98b12",
+      "ue_imported": false,
+      "ue_verified": false
+    },
+    {
+      "file": "Prepared/Skeleton/Skeleton_Move_8Directions.png",
+      "actor": "Skeleton",
+      "action": "Move",
+      "image_size": [
+        1024,
+        1024
+      ],
+      "frame_size": [
+        128,
+        128
+      ],
+      "directions": [
+        "W",
+        "NW",
+        "N",
+        "NE",
+        "E",
+        "SE",
+        "S",
+        "SW"
+      ],
+      "source_columns_zero_based": [
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "source_frames_per_direction": 8,
+      "pivot_pixel_from_top_left": [
+        64,
+        96
+      ],
+      "pivot_normalized": [
+        0.5,
+        0.75
+      ],
+      "source_release_fps": null,
+      "preview_reference_ms_per_frame": 60,
+      "preview_reference_fps": 16.666666666666668,
+      "timing_basis": "官方 Flare v0.14 动画定义，仅作小样参考，不是原包声明的 FPS",
+      "source_frame_order": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "preview_order": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "preview_pause_after_once_ms": 0,
+      "preview_loop_is_demonstration_only": true,
+      "rgba_sha256": "389ffc3238ff0874b5b6ee9f2772050a92cff06dab1334eaef80e0973d67ceee",
+      "file_sha256": "91088439848b448254636aae3478d494c0d16e3f54d6f80bec070abfa8fd0f4d",
+      "ue_imported": false,
+      "ue_verified": false
+    },
+    {
+      "file": "Prepared/Skeleton/Skeleton_Attack_8Directions.png",
+      "actor": "Skeleton",
+      "action": "Attack",
+      "image_size": [
+        512,
+        1024
+      ],
+      "frame_size": [
+        128,
+        128
+      ],
+      "directions": [
+        "W",
+        "NW",
+        "N",
+        "NE",
+        "E",
+        "SE",
+        "S",
+        "SW"
+      ],
+      "source_columns_zero_based": [
+        12,
+        13,
+        14,
+        15
+      ],
+      "source_frames_per_direction": 4,
+      "pivot_pixel_from_top_left": [
+        64,
+        96
+      ],
+      "pivot_normalized": [
+        0.5,
+        0.75
+      ],
+      "source_release_fps": null,
+      "preview_reference_ms_per_frame": 90,
+      "preview_reference_fps": 11.11111111111111,
+      "timing_basis": "官方 Flare v0.14 动画定义，仅作小样参考，不是原包声明的 FPS",
+      "source_frame_order": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "preview_order": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "preview_pause_after_once_ms": 600,
+      "preview_loop_is_demonstration_only": true,
+      "rgba_sha256": "1905fccb6ccbd9d4ca56f07b91038926911956557bc1d5c7091b538f4e346ac3",
+      "file_sha256": "7182d79bb2569ef516366a5217a6609327a0e5f5cb3ba92348b95bd73d686454",
+      "ue_imported": false,
+      "ue_verified": false
+    },
+    {
+      "file": "Prepared/Skeleton/Skeleton_Hit_8Directions.png",
+      "actor": "Skeleton",
+      "action": "Hit",
+      "image_size": [
+        256,
+        1024
+      ],
+      "frame_size": [
+        128,
+        128
+      ],
+      "directions": [
+        "W",
+        "NW",
+        "N",
+        "NE",
+        "E",
+        "SE",
+        "S",
+        "SW"
+      ],
+      "source_columns_zero_based": [
+        22,
+        23
+      ],
+      "source_frames_per_direction": 2,
+      "pivot_pixel_from_top_left": [
+        64,
+        96
+      ],
+      "pivot_normalized": [
+        0.5,
+        0.75
+      ],
+      "source_release_fps": null,
+      "preview_reference_ms_per_frame": 60,
+      "preview_reference_fps": 16.666666666666668,
+      "timing_basis": "官方 Flare v0.14 动画定义，仅作小样参考，不是原包声明的 FPS",
+      "source_frame_order": [
+        0,
+        1
+      ],
+      "preview_order": [
+        0,
+        1
+      ],
+      "preview_pause_after_once_ms": 600,
+      "preview_loop_is_demonstration_only": true,
+      "rgba_sha256": "3a308fdfb025a85f2a077d45bd0c30d59fd7467edc8b839824204988d69e68fe",
+      "file_sha256": "8c4246121defdd0128eafeeae02e84ec0fa924dd10b85ca94a6a0fbd0cc60776",
+      "ue_imported": false,
+      "ue_verified": false
+    },
+    {
+      "file": "Prepared/Skeleton/Skeleton_Die_8Directions.png",
+      "actor": "Skeleton",
+      "action": "Die",
+      "image_size": [
+        768,
+        1024
+      ],
+      "frame_size": [
+        128,
+        128
+      ],
+      "directions": [
+        "W",
+        "NW",
+        "N",
+        "NE",
+        "E",
+        "SE",
+        "S",
+        "SW"
+      ],
+      "source_columns_zero_based": [
+        22,
+        23,
+        24,
+        25,
+        26,
+        27
+      ],
+      "source_frames_per_direction": 6,
+      "pivot_pixel_from_top_left": [
+        64,
+        96
+      ],
+      "pivot_normalized": [
+        0.5,
+        0.75
+      ],
+      "source_release_fps": null,
+      "preview_reference_ms_per_frame": 120,
+      "preview_reference_fps": 8.333333333333334,
+      "timing_basis": "官方 Flare v0.14 动画定义，仅作小样参考，不是原包声明的 FPS",
+      "source_frame_order": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "preview_order": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "preview_pause_after_once_ms": 600,
+      "preview_loop_is_demonstration_only": true,
+      "rgba_sha256": "1ccb0e0716617448aacc571927441e6595db30b5b34d3d6c825c5996c210df2d",
+      "file_sha256": "e935b88f0833fecbe35db245f7a55344b22f8e8893177eba06feee2c175c37bd",
+      "ue_imported": false,
+      "ue_verified": false
+    }
+  ],
+  "verification": {
+    "checked_frame_cells": 384,
+    "source_pixel_mismatch": 0,
+    "source_hashes_checked": 13,
+    "skeleton_rgba_sha256": "5825924d986e8b0c2aca5d597dbf9eee22e1913d43bd7405a72e3c9a53990231",
+    "cell_edge_or_empty_findings": [
+      {
+        "actor": "Skeleton",
+        "action": "Attack",
+        "row": 0,
+        "frame": 2,
+        "issue": "source_alpha_touches_cell_edge",
+        "bounds": [
+          0,
+          49,
+          85,
+          103
+        ]
+      },
+      {
+        "actor": "Skeleton",
+        "action": "Attack",
+        "row": 2,
+        "frame": 3,
+        "issue": "source_alpha_touches_cell_edge",
+        "bounds": [
+          31,
+          40,
+          128,
+          104
+        ]
+      },
+      {
+        "actor": "Skeleton",
+        "action": "Attack",
+        "row": 3,
+        "frame": 2,
+        "issue": "source_alpha_touches_cell_edge",
+        "bounds": [
+          40,
+          43,
+          128,
+          100
+        ]
+      },
+      {
+        "actor": "Skeleton",
+        "action": "Attack",
+        "row": 3,
+        "frame": 3,
+        "issue": "source_alpha_touches_cell_edge",
+        "bounds": [
+          43,
+          43,
+          128,
+          100
+        ]
+      },
+      {
+        "actor": "Skeleton",
+        "action": "Attack",
+        "row": 4,
+        "frame": 2,
+        "issue": "source_alpha_touches_cell_edge",
+        "bounds": [
+          45,
+          44,
+          128,
+          104
+        ]
+      },
+      {
+        "actor": "Skeleton",
+        "action": "Attack",
+        "row": 7,
+        "frame": 3,
+        "issue": "source_alpha_touches_cell_edge",
+        "bounds": [
+          0,
+          56,
+          96,
+          100
+        ]
+      }
+    ]
+  },
+  "engine_integration": "PNG -> Texture2D -> 128x128 网格 PaperSprite -> 每动作每方向 PaperFlipbook；参考锚点(64,96)。插件及材质/朝向逻辑交框架负责人。"
+}

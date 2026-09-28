@@ -1,0 +1,6 @@
+{
+  "result": "FAIL",
+  "utc": "2026-09-24T08:15:45.517761+00:00",
+  "error": "预期474个新资产尚未齐全：缺474个；首项=['/Game/TestArt/Sprites/FlareSample/Hero/Idle/T_Hero_Idle']",
+  "error_type": "AssertionError"
+}

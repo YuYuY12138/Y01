@@ -1,0 +1,39 @@
+{
+  "result": "PASS_WITH_SOURCE_EDGE_NOTES",
+  "unit_tests_separate": "test_sample.py",
+  "verified_source_records": 13,
+  "action_sheets": 10,
+  "frame_cells": 384,
+  "pixel_mismatches": 0,
+  "empty_frames": 0,
+  "source_edge_touch_frames": 6,
+  "gif_metadata": [
+    {
+      "file": "Preview/Idle_8Directions.gif",
+      "encoded_frames": 24,
+      "cycle_ms": 2160
+    },
+    {
+      "file": "Preview/Move_8Directions.gif",
+      "encoded_frames": 8,
+      "cycle_ms": 480
+    },
+    {
+      "file": "Preview/Attack_8Directions.gif",
+      "encoded_frames": 4,
+      "cycle_ms": 960
+    },
+    {
+      "file": "Preview/Hit_8Directions.gif",
+      "encoded_frames": 2,
+      "cycle_ms": 720
+    },
+    {
+      "file": "Preview/Die_8Directions.gif",
+      "encoded_frames": 6,
+      "cycle_ms": 1320
+    }
+  ],
+  "ue_imported": false,
+  "ue_verified": false
+}

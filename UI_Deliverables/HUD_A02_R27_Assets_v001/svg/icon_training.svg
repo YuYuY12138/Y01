@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+<ellipse cx="32.0" cy="32.0" rx="20.0" ry="20.0" fill="none" stroke="#ffffff" stroke-opacity="1.000000" stroke-width="3"/>
+<ellipse cx="32.0" cy="32.0" rx="9.0" ry="9.0" fill="none" stroke="#ffffff" stroke-opacity="1.000000" stroke-width="3"/>
+<polyline points="32,4 32,16" fill="none" stroke="#ffffff" stroke-opacity="1.000000" stroke-width="3" stroke-linejoin="round"/>
+<polyline points="48,32 60,32" fill="none" stroke="#ffffff" stroke-opacity="1.000000" stroke-width="3" stroke-linejoin="round"/>
+</svg>

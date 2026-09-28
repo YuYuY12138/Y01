@@ -1,0 +1,1022 @@
+{
+  "pack": "Y01_UI_Assets_v001",
+  "collaboration": "COLLAB-03",
+  "requirements": [
+    "A01",
+    "A02",
+    "R27"
+  ],
+  "asset_count": 34,
+  "ue_import_verified": false,
+  "business_logic_connected": false,
+  "palette": {
+    "background": "#101923",
+    "panel": "#182633",
+    "line": "#506779",
+    "text": "#EDF3F5",
+    "muted": "#A9BDC8",
+    "cyan": "#55DCCF",
+    "green": "#72D495",
+    "blue": "#63AEF1",
+    "purple": "#B995ED",
+    "gold": "#E9C773",
+    "red": "#EF7B79"
+  },
+  "scope_zh": "仅独立素材：不含 Widget、角色挂接、GAS、RPC、结算或输入实现；不含字体，不改变任何工程配置。",
+  "suggested_ue_import_zh": [
+    "PNG 用作未来的 Texture2D；SVG 为编辑源，不假定 UE 直接支持导入。",
+    "导入时建议 Compression=UserInterface2D (RGBA)、TextureGroup=UI、sRGB=true、MipGenSettings=NoMipmaps、AddressX/Y=Clamp；均未在 UE 实测。",
+    "Box 九宫格的 Margin 按每项 ue_margin_ltrb 顺序 Left/Top/Right/Bottom；Image 项保持等比或按用途裁切。",
+    "白色填充和图标通过 Widget Tint 着色；已着色框/底板保持白色 Tint，避免二次变色。",
+    "字体、数字、标签、进度比例、透明度和动画都由以后获授权的 Widget 设置；不烘焙在贴图里。",
+    "素材就绪不表示 UE 已导入或真实逻辑接入；先确认目录归属与编辑器时段。"
+  ],
+  "assets": [
+    {
+      "id": "panel_body",
+      "label_zh": "分区面板",
+      "group": "common",
+      "png": "png/panel_body.png",
+      "svg": "svg/panel_body.svg",
+      "size_px": [
+        256,
+        128
+      ],
+      "nine_slice_px": [
+        16,
+        16,
+        16,
+        16
+      ],
+      "ue_margin_ltrb": [
+        0.0625,
+        0.125,
+        0.0625,
+        0.125
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "独立九宫格；标题条与内容分离，收起时只保留标题条。文字和三角由 Widget 叠加。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "f6e0e056ffac0521b17471a0779f234d0e823768792263b90683bb2da20489e7",
+      "sha256_svg": "b9d0914a58c6c0cda6469eb2211b678c602d53f421f0f34ac73d188fe73f1a05"
+    },
+    {
+      "id": "panel_header",
+      "label_zh": "折叠标题条",
+      "group": "common",
+      "png": "png/panel_header.png",
+      "svg": "svg/panel_header.svg",
+      "size_px": [
+        256,
+        64
+      ],
+      "nine_slice_px": [
+        16,
+        16,
+        16,
+        16
+      ],
+      "ue_margin_ltrb": [
+        0.0625,
+        0.25,
+        0.0625,
+        0.25
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "独立九宫格；标题条与内容分离，收起时只保留标题条。文字和三角由 Widget 叠加。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "33ae2a9d566e644a5aa336e22f489986574252737ce950aeb2942022d6718d9e",
+      "sha256_svg": "573885531f062bbed562c5196a63f3d52ef3b7ebd7e2d10dea897dd84573bf09"
+    },
+    {
+      "id": "button_normal",
+      "label_zh": "按钮 · 常态",
+      "group": "button",
+      "png": "png/button_normal.png",
+      "svg": "svg/button_normal.svg",
+      "size_px": [
+        192,
+        64
+      ],
+      "nine_slice_px": [
+        14,
+        14,
+        14,
+        14
+      ],
+      "ue_margin_ltrb": [
+        0.07291666666666667,
+        0.21875,
+        0.07291666666666667,
+        0.21875
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "无烘焙文字；不可用原因应另用文字说明，不能只靠颜色。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "1cdbaf513c563708b68586650a730363023982a7e8fd6a05620d4843acdebf80",
+      "sha256_svg": "48353ccb22dbbb9eda2c1cac36f7062669a3825c5e145936e7628babf8f11627"
+    },
+    {
+      "id": "button_hover",
+      "label_zh": "按钮 · 悬停／聚焦",
+      "group": "button",
+      "png": "png/button_hover.png",
+      "svg": "svg/button_hover.svg",
+      "size_px": [
+        192,
+        64
+      ],
+      "nine_slice_px": [
+        14,
+        14,
+        14,
+        14
+      ],
+      "ue_margin_ltrb": [
+        0.07291666666666667,
+        0.21875,
+        0.07291666666666667,
+        0.21875
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "无烘焙文字；不可用原因应另用文字说明，不能只靠颜色。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "d8f2ac701b94b04984af1cfabe5fe3106ac6131af40dcdf56dd4c2799233a988",
+      "sha256_svg": "0617a737032adb8a7101f4c124e34858d3b168a242fada12eca5e02b10a7b22c"
+    },
+    {
+      "id": "button_pressed",
+      "label_zh": "按钮 · 按下",
+      "group": "button",
+      "png": "png/button_pressed.png",
+      "svg": "svg/button_pressed.svg",
+      "size_px": [
+        192,
+        64
+      ],
+      "nine_slice_px": [
+        14,
+        14,
+        14,
+        14
+      ],
+      "ue_margin_ltrb": [
+        0.07291666666666667,
+        0.21875,
+        0.07291666666666667,
+        0.21875
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "无烘焙文字；不可用原因应另用文字说明，不能只靠颜色。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "8e1e06ea737508496e08223db258c3d667b2957548fe0a675a4b70754018fb2a",
+      "sha256_svg": "3dd67095815b9cc90a0b8008dc18e36d600653124f6ebfc2672d4e4d9ee5754a"
+    },
+    {
+      "id": "button_disabled",
+      "label_zh": "按钮 · 不可用",
+      "group": "button",
+      "png": "png/button_disabled.png",
+      "svg": "svg/button_disabled.svg",
+      "size_px": [
+        192,
+        64
+      ],
+      "nine_slice_px": [
+        14,
+        14,
+        14,
+        14
+      ],
+      "ue_margin_ltrb": [
+        0.07291666666666667,
+        0.21875,
+        0.07291666666666667,
+        0.21875
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "无烘焙文字；不可用原因应另用文字说明，不能只靠颜色。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "e38ca9ebc85014dc89984578f6309103c1e7071dd51cefbefbb5793e4f9b36ea",
+      "sha256_svg": "274ad7096b5939d7012ef73d7ee2d152644f4856642777352cffb1c18f405867"
+    },
+    {
+      "id": "chevron_down",
+      "label_zh": "展开态：点击收起",
+      "group": "common",
+      "png": "png/chevron_down.png",
+      "svg": "svg/chevron_down.svg",
+      "size_px": [
+        64,
+        64
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "由 Widget 着色",
+      "usage_zh": "白色透明蒙版；视觉图标可缩至16—20像素，建议按钮点击区独立放大。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "8f12609d4c035c224f735901456957749738d49db2560424d43c941cbc7da7bb",
+      "sha256_svg": "4c60398b0a0052c6b8e68d40b42482b29a1e19a8f2b0c4cb38227c6176541677"
+    },
+    {
+      "id": "chevron_right",
+      "label_zh": "收起态：点击展开",
+      "group": "common",
+      "png": "png/chevron_right.png",
+      "svg": "svg/chevron_right.svg",
+      "size_px": [
+        64,
+        64
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "由 Widget 着色",
+      "usage_zh": "白色透明蒙版；视觉图标可缩至16—20像素，建议按钮点击区独立放大。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "84abeaf686ff7dfaad406a2127fde7f5c4219757fbe1a58a5185dc99318ff700",
+      "sha256_svg": "bc4417d7d6c24a15c3d556a6807f2a5ac12cf8d957e84997192c19594978f213"
+    },
+    {
+      "id": "quality_green",
+      "label_zh": "品质框 · 绿",
+      "group": "slot",
+      "png": "png/quality_green.png",
+      "svg": "svg/quality_green.svg",
+      "size_px": [
+        128,
+        128
+      ],
+      "nine_slice_px": [
+        18,
+        18,
+        18,
+        18
+      ],
+      "ue_margin_ltrb": [
+        0.140625,
+        0.140625,
+        0.140625,
+        0.140625
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "中间透明；品质文字不烘焙进贴图，由 Widget 补充，不能只靠边框颜色。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "c36ca7f828f70229383dfcf6d2e8a30768db275cf3d97887ae780c8156a87ec3",
+      "sha256_svg": "45fa0babc37e289efe8be02d8bfae08c8b358c21d8c7c1c9e73bc6f7576da401"
+    },
+    {
+      "id": "quality_blue",
+      "label_zh": "品质框 · 蓝",
+      "group": "slot",
+      "png": "png/quality_blue.png",
+      "svg": "svg/quality_blue.svg",
+      "size_px": [
+        128,
+        128
+      ],
+      "nine_slice_px": [
+        18,
+        18,
+        18,
+        18
+      ],
+      "ue_margin_ltrb": [
+        0.140625,
+        0.140625,
+        0.140625,
+        0.140625
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "中间透明；品质文字不烘焙进贴图，由 Widget 补充，不能只靠边框颜色。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "6c307d36370a3b562bd85ab0c30e47fea1809bf9e290fa21e59b1e40d0917974",
+      "sha256_svg": "e1c3db1471a9cc235108cec054ae85f24f281217822954af9ae255360f7c9164"
+    },
+    {
+      "id": "quality_purple",
+      "label_zh": "品质框 · 紫",
+      "group": "slot",
+      "png": "png/quality_purple.png",
+      "svg": "svg/quality_purple.svg",
+      "size_px": [
+        128,
+        128
+      ],
+      "nine_slice_px": [
+        18,
+        18,
+        18,
+        18
+      ],
+      "ue_margin_ltrb": [
+        0.140625,
+        0.140625,
+        0.140625,
+        0.140625
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "中间透明；品质文字不烘焙进贴图，由 Widget 补充，不能只靠边框颜色。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "f8356153bd20681c7b64cf50ee7efb7cbcd519776811683e2b77b86e44177b52",
+      "sha256_svg": "355be3367dc3c632cbbfaa51577cc6506c743a9485689470612e09cbdcd98de3"
+    },
+    {
+      "id": "quality_gold",
+      "label_zh": "品质框 · 金",
+      "group": "slot",
+      "png": "png/quality_gold.png",
+      "svg": "svg/quality_gold.svg",
+      "size_px": [
+        128,
+        128
+      ],
+      "nine_slice_px": [
+        18,
+        18,
+        18,
+        18
+      ],
+      "ue_margin_ltrb": [
+        0.140625,
+        0.140625,
+        0.140625,
+        0.140625
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "中间透明；品质文字不烘焙进贴图，由 Widget 补充，不能只靠边框颜色。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "41bf24252a3e5a18339ddcc9715c20e9a09ac71e81af594335af1323f9bfa534",
+      "sha256_svg": "3577678c47cbff9999d49da1ddf19d789eba427bbf7b51ad0a844d620e4ca068"
+    },
+    {
+      "id": "quality_red",
+      "label_zh": "品质框 · 红",
+      "group": "slot",
+      "png": "png/quality_red.png",
+      "svg": "svg/quality_red.svg",
+      "size_px": [
+        128,
+        128
+      ],
+      "nine_slice_px": [
+        18,
+        18,
+        18,
+        18
+      ],
+      "ue_margin_ltrb": [
+        0.140625,
+        0.140625,
+        0.140625,
+        0.140625
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "中间透明；品质文字不烘焙进贴图，由 Widget 补充，不能只靠边框颜色。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "eba009df5719c52dcf8b3c77efdf456464aba9ef37bf635cf076a7fcc59cbea1",
+      "sha256_svg": "807e23fe0d8685ae9a6a94d88a9c398c9032e83a7dcc761497464dcfb389d4e2"
+    },
+    {
+      "id": "slot_empty",
+      "label_zh": "空槽",
+      "group": "slot",
+      "png": "png/slot_empty.png",
+      "svg": "svg/slot_empty.svg",
+      "size_px": [
+        128,
+        128
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "含中心空槽短线，使用等比 Image，不做九宫格。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "bb2fa2046b28bb5ccd68c9d74654cdeaf1d31aa909b82cdb8e515164f22424e1",
+      "sha256_svg": "40983d2daa90a6f0830ddaddfb0d4bea277e2972ec37144974c5c9c1c8c93762"
+    },
+    {
+      "id": "skill_active_frame",
+      "label_zh": "主动技能框",
+      "group": "slot",
+      "png": "png/skill_active_frame.png",
+      "svg": "svg/skill_active_frame.svg",
+      "size_px": [
+        128,
+        128
+      ],
+      "nine_slice_px": [
+        18,
+        18,
+        18,
+        18
+      ],
+      "ue_margin_ltrb": [
+        0.140625,
+        0.140625,
+        0.140625,
+        0.140625
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "类型文字另叠加；被动不是禁用状态，不使用锁或施放提示。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "c0b9ed81cae57cfeb96bcd023eb877850758609e25883d3e0ee131ebf648e805",
+      "sha256_svg": "65cbddcb02d11afc3cc544d08058e9a5bb40f7e1476f429124a50b5793821ea6"
+    },
+    {
+      "id": "skill_passive_frame",
+      "label_zh": "被动技能框",
+      "group": "slot",
+      "png": "png/skill_passive_frame.png",
+      "svg": "svg/skill_passive_frame.svg",
+      "size_px": [
+        128,
+        128
+      ],
+      "nine_slice_px": [
+        18,
+        18,
+        18,
+        18
+      ],
+      "ue_margin_ltrb": [
+        0.140625,
+        0.140625,
+        0.140625,
+        0.140625
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "类型文字另叠加；被动不是禁用状态，不使用锁或施放提示。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "00f1ddd20ce781bc8c4afba180c0e660f7fb2388bcd13ef846475dd6bfb2c460",
+      "sha256_svg": "096ad55ac7b0786368b654117816a447da89371c591a64795f8da06fd3bea756"
+    },
+    {
+      "id": "cooldown_mask",
+      "label_zh": "冷却暗层",
+      "group": "slot",
+      "png": "png/cooldown_mask.png",
+      "svg": "svg/cooldown_mask.svg",
+      "size_px": [
+        128,
+        128
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "仅整槽暗层，不包含进度、倒计时或动画；数字及动态裁切以后由界面层处理。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "f51f53ee1a973ab6005a177f5c4a202c5ad2b5cdaa0a9025a70274f77aa42ef5",
+      "sha256_svg": "dfb6d88c943c579faf1db28dd1094fee154c6b0fbcdafde6fc88c4db3062ec83"
+    },
+    {
+      "id": "health_track",
+      "label_zh": "单位血条底轨",
+      "group": "health",
+      "png": "png/health_track.png",
+      "svg": "svg/health_track.svg",
+      "size_px": [
+        256,
+        32
+      ],
+      "nine_slice_px": [
+        14,
+        14,
+        14,
+        14
+      ],
+      "ue_margin_ltrb": [
+        0.0546875,
+        0.4375,
+        0.0546875,
+        0.4375
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "底轨、填充、外框分层；无生命数字、护盾或延迟扣血语义。参考填充内缩左右10px、上下8px。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "e5cc2442db3c4e0ff30a82aa06a8f25a7b4b9e08dcbdfdb690536b80a3b02680",
+      "sha256_svg": "888d4b1cbba691b8ff29ade4f67c090f0e3c248329a664018314b2179a23742c"
+    },
+    {
+      "id": "health_frame",
+      "label_zh": "单位血条外框",
+      "group": "health",
+      "png": "png/health_frame.png",
+      "svg": "svg/health_frame.svg",
+      "size_px": [
+        256,
+        32
+      ],
+      "nine_slice_px": [
+        14,
+        14,
+        14,
+        14
+      ],
+      "ue_margin_ltrb": [
+        0.0546875,
+        0.4375,
+        0.0546875,
+        0.4375
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "底轨、填充、外框分层；无生命数字、护盾或延迟扣血语义。参考填充内缩左右10px、上下8px。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "46fef784d43641ada72ac4ef653bc94b02be81633d2a2bdf97dceeb7d4cfb70e",
+      "sha256_svg": "e87365d9f8051942ea8288fe817edac57c8a74fa89e00f7523c7a2719a4b9cbd"
+    },
+    {
+      "id": "boss_track",
+      "label_zh": "BOSS 血条底轨",
+      "group": "health",
+      "png": "png/boss_track.png",
+      "svg": "svg/boss_track.svg",
+      "size_px": [
+        512,
+        48
+      ],
+      "nine_slice_px": [
+        14,
+        14,
+        14,
+        14
+      ],
+      "ue_margin_ltrb": [
+        0.02734375,
+        0.2916666666666667,
+        0.02734375,
+        0.2916666666666667
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "底轨、填充、外框分层；无生命数字、护盾或延迟扣血语义。参考填充内缩左右10px、上下8px。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "7061a0a44858bbb86e21c60d6d13093474ed0ba0f68337255ad831ecaeded4aa",
+      "sha256_svg": "390632afe2b99d5e0aa6f2945d863fc55663ee13dc81fb885958b74fbe5fd8c3"
+    },
+    {
+      "id": "boss_frame",
+      "label_zh": "BOSS 血条外框",
+      "group": "health",
+      "png": "png/boss_frame.png",
+      "svg": "svg/boss_frame.svg",
+      "size_px": [
+        512,
+        48
+      ],
+      "nine_slice_px": [
+        14,
+        14,
+        14,
+        14
+      ],
+      "ue_margin_ltrb": [
+        0.02734375,
+        0.2916666666666667,
+        0.02734375,
+        0.2916666666666667
+      ],
+      "draw_as": "Box",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "底轨、填充、外框分层；无生命数字、护盾或延迟扣血语义。参考填充内缩左右10px、上下8px。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "26a51d7e389468bd8e427b20b83fa30f3518d3ffecdd1f32fac99c754bb65874",
+      "sha256_svg": "00e512528d62e22069f42d298a91f907cdc09b849f2d076e3f34487d8c2a73f6"
+    },
+    {
+      "id": "health_fill_white",
+      "label_zh": "通用可着色填充",
+      "group": "health",
+      "png": "png/health_fill_white.png",
+      "svg": "svg/health_fill_white.svg",
+      "size_px": [
+        256,
+        16
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "由 Widget 着色",
+      "usage_zh": "纯白无纹理RGBA，矩形内部全不透明是有意设计；UI按类型着色并按比例裁切，不拉伸外框来表示生命。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "1d13539034c8db3b5d7d969bcde74dfedef40f14e6c2fe02c70a0a9fc2ab47c4",
+      "sha256_svg": "795218e47d8c7587e0f141b1a39c021b0bbb2803b3bcd44287e781e3d6403eb3"
+    },
+    {
+      "id": "icon_coin",
+      "label_zh": "图标 · 金币",
+      "group": "icon",
+      "png": "png/icon_coin.png",
+      "svg": "svg/icon_coin.svg",
+      "size_px": [
+        64,
+        64
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "由 Widget 着色",
+      "usage_zh": "原创基础几何符号；64px母版，建议32px以上展示，配独立文字标签，不等于正式技能/装备条目。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "5cb0e10e932bc3a46ba9a8553810f9ef1b77c68497edd5d99066e92d77ddfc2e",
+      "sha256_svg": "0795f9d08b67f211449cc70dfdb399c96c423396fbefc9abcd5aba8b5fae77d6"
+    },
+    {
+      "id": "icon_experience",
+      "label_zh": "图标 · 经验",
+      "group": "icon",
+      "png": "png/icon_experience.png",
+      "svg": "svg/icon_experience.svg",
+      "size_px": [
+        64,
+        64
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "由 Widget 着色",
+      "usage_zh": "原创基础几何符号；64px母版，建议32px以上展示，配独立文字标签，不等于正式技能/装备条目。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "78a578ff5719e68aec0a97e874cccd58fa069a36c8f77550233409540a1c1b2f",
+      "sha256_svg": "f94a785100d72eb3cf5b03496fe31a4402e994184d62aed4f0a406769a84ab22"
+    },
+    {
+      "id": "icon_damage",
+      "label_zh": "图标 · 伤害",
+      "group": "icon",
+      "png": "png/icon_damage.png",
+      "svg": "svg/icon_damage.svg",
+      "size_px": [
+        64,
+        64
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "由 Widget 着色",
+      "usage_zh": "原创基础几何符号；64px母版，建议32px以上展示，配独立文字标签，不等于正式技能/装备条目。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "c2ae675a17385eac08dbb6a1dc8952cdb2d33bebb2c67d4ed935cf60546e70d8",
+      "sha256_svg": "b527387b6bd96ea224d38ee22c143984655ddb10b932e021a750a4c5736dc687"
+    },
+    {
+      "id": "icon_training",
+      "label_zh": "图标 · 练功房",
+      "group": "icon",
+      "png": "png/icon_training.png",
+      "svg": "svg/icon_training.svg",
+      "size_px": [
+        64,
+        64
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "由 Widget 着色",
+      "usage_zh": "原创基础几何符号；64px母版，建议32px以上展示，配独立文字标签，不等于正式技能/装备条目。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "b8a42618ee1357fccefc41d72ac46bd9645adfdbf221ea9ddb066e48aa3aa8e1",
+      "sha256_svg": "b4f722a03a8bd294e5ba2eff1ee121b603eb9b944462fb46e6a941c2a404ce8d"
+    },
+    {
+      "id": "icon_home",
+      "label_zh": "图标 · 回城",
+      "group": "icon",
+      "png": "png/icon_home.png",
+      "svg": "svg/icon_home.svg",
+      "size_px": [
+        64,
+        64
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "由 Widget 着色",
+      "usage_zh": "原创基础几何符号；64px母版，建议32px以上展示，配独立文字标签，不等于正式技能/装备条目。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "3efabe0306fe05f98e2a03f76c234a2dc1249313307cb06f0b39ca1738f041a0",
+      "sha256_svg": "1492babd745018460b1117845a880ac41742bd791ea7bbcd2c71d4e42bcaf90f"
+    },
+    {
+      "id": "icon_tower",
+      "label_zh": "图标 · 爬塔",
+      "group": "icon",
+      "png": "png/icon_tower.png",
+      "svg": "svg/icon_tower.svg",
+      "size_px": [
+        64,
+        64
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "由 Widget 着色",
+      "usage_zh": "原创基础几何符号；64px母版，建议32px以上展示，配独立文字标签，不等于正式技能/装备条目。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "dd7c0bf13a5dda6243e34cdd308c087fd4f81ba15deabaeb3557fa133ed8eddd",
+      "sha256_svg": "836ba14ef68cca1333d821638b78c54e35bbf3325a4c936ecd8b3cf51e62e21e"
+    },
+    {
+      "id": "icon_shop",
+      "label_zh": "图标 · 商店",
+      "group": "icon",
+      "png": "png/icon_shop.png",
+      "svg": "svg/icon_shop.svg",
+      "size_px": [
+        64,
+        64
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "由 Widget 着色",
+      "usage_zh": "原创基础几何符号；64px母版，建议32px以上展示，配独立文字标签，不等于正式技能/装备条目。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "79337c9183bcf9f46486e46960c6dc6dd1dbe192bc58866a0dc2ef1878b81e17",
+      "sha256_svg": "56f9c4639074f93b327fdb21d0f610d473c28131a76e9819c2fef062239e6a45"
+    },
+    {
+      "id": "icon_technology",
+      "label_zh": "图标 · 科技",
+      "group": "icon",
+      "png": "png/icon_technology.png",
+      "svg": "svg/icon_technology.svg",
+      "size_px": [
+        64,
+        64
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "由 Widget 着色",
+      "usage_zh": "原创基础几何符号；64px母版，建议32px以上展示，配独立文字标签，不等于正式技能/装备条目。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "3cfcfa1585743c706288a8369d3c231d0ccd041a691efa383fb406247c736a62",
+      "sha256_svg": "f0f0ecfcb3d401e4c2a28ab7db91d8c46fc48544ac84255f70a4b4f4f79df994"
+    },
+    {
+      "id": "icon_active",
+      "label_zh": "图标 · 主动占位",
+      "group": "icon",
+      "png": "png/icon_active.png",
+      "svg": "svg/icon_active.svg",
+      "size_px": [
+        64,
+        64
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "由 Widget 着色",
+      "usage_zh": "原创基础几何符号；64px母版，建议32px以上展示，配独立文字标签，不等于正式技能/装备条目。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "c2ae675a17385eac08dbb6a1dc8952cdb2d33bebb2c67d4ed935cf60546e70d8",
+      "sha256_svg": "b527387b6bd96ea224d38ee22c143984655ddb10b932e021a750a4c5736dc687"
+    },
+    {
+      "id": "icon_passive",
+      "label_zh": "图标 · 被动占位",
+      "group": "icon",
+      "png": "png/icon_passive.png",
+      "svg": "svg/icon_passive.svg",
+      "size_px": [
+        64,
+        64
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "由 Widget 着色",
+      "usage_zh": "原创基础几何符号；64px母版，建议32px以上展示，配独立文字标签，不等于正式技能/装备条目。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "ed49b1d504c7ffe5887774537cf4d8c630e7a496c9772de2a19f7483ac7381bd",
+      "sha256_svg": "93d74668242be0d9a0ff88061662584158952e6747819d8f3140cefadeb944e8"
+    },
+    {
+      "id": "joystick_base",
+      "label_zh": "移动摇杆底环",
+      "group": "input",
+      "png": "png/joystick_base.png",
+      "svg": "svg/joystick_base.svg",
+      "size_px": [
+        256,
+        256
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "触控方案尚未定案，仅预备视觉素材，不含输入逻辑。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "88b7c5289e171e552a0aa33131e319fa4f335b4d02b47015d9eff15f07f1c026",
+      "sha256_svg": "3be2eed5231a72007e0e227b5acee76900c83a709d7e495317e5588f374892df"
+    },
+    {
+      "id": "joystick_knob",
+      "label_zh": "移动摇杆手柄",
+      "group": "input",
+      "png": "png/joystick_knob.png",
+      "svg": "svg/joystick_knob.svg",
+      "size_px": [
+        96,
+        96
+      ],
+      "nine_slice_px": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "ue_margin_ltrb": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "draw_as": "Image",
+      "tint_policy": "保持白色 tint",
+      "usage_zh": "与底环独立使用，不能凭素材交付宣称触控输入完成。",
+      "source_id": "original-vector-v001",
+      "sha256_png": "b5fcaf204c951969fbb7301d1cfec3eb8903afe01b9a61a6d1337312f7c88e7c",
+      "sha256_svg": "1f681910b4132425358fab09efbeaa6f616b69d1b0982f52e6f03b90c189ae14"
+    }
+  ]
+}

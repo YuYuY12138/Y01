@@ -1,0 +1,17 @@
+{
+  "source_id": "original-vector-v001",
+  "created": "2026-09-24",
+  "source_zh": "本次使用原创几何指令和 Python/Pillow 绘制；SVG 与 PNG 同源生成。没有从此前概念图裁切或再分发其中图标。",
+  "authoring_source": "tools/build_asset_pack.py",
+  "third_party_assets": [],
+  "purchased_resources": [],
+  "license_status_zh": "本包为本任务中新创作的基础几何视觉素材，未引入第三方素材许可证。权利归属及商用使用遵循用户与所用服务的适用条款，本包不额外宣称 CC0、公共领域或排他权；正式对外发行前由项目确认适用条款。",
+  "attribution_zh": "没有第三方素材作者署名义务记录；保留本来源清单用于项目追溯。未核验的服务条款义务不据此免除。",
+  "fonts_zh": "仅预览 PNG 使用本机 Microsoft YaHei 字体渲染，未复制或打包字体文件；独立素材 PNG/SVG 内无文字。正式 UI 字体需另行确认许可。",
+  "tooling_zh": "生成工具依赖 Python 3 与 Pillow（环境已安装）。本包不分发 Python、Pillow 或其字体文件。",
+  "unverified_zh": [
+    "UE 导入和材质显示",
+    "移动端缩放及触控尺寸",
+    "任何真实数据、网络或动画表现"
+  ]
+}

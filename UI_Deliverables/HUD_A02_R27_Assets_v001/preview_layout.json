@@ -1,0 +1,96 @@
+{
+  "simulated": true,
+  "equipment_slot_count": 6,
+  "skill_types": [
+    "active",
+    "active",
+    "passive",
+    "passive"
+  ],
+  "world_units": [
+    "warehouse",
+    "self",
+    "teammate",
+    "monster"
+  ],
+  "floating_types": [
+    "damage",
+    "gold",
+    "experience"
+  ],
+  "regions": [
+    {
+      "name": "个人状态",
+      "rect": [
+        40,
+        132,
+        320,
+        176
+      ]
+    },
+    {
+      "name": "波次阶段",
+      "rect": [
+        556,
+        132,
+        672,
+        126
+      ]
+    },
+    {
+      "name": "BOSS · 示例首领",
+      "rect": [
+        556,
+        270,
+        672,
+        128
+      ]
+    },
+    {
+      "name": "区域与发育",
+      "rect": [
+        1420,
+        132,
+        340,
+        240
+      ]
+    },
+    {
+      "name": "伤害占比",
+      "rect": [
+        40,
+        332,
+        300,
+        240
+      ]
+    },
+    {
+      "name": "移动（假设）",
+      "rect": [
+        48,
+        782,
+        270,
+        48
+      ]
+    },
+    {
+      "name": "装备 · 6槽",
+      "rect": [
+        410,
+        858,
+        772,
+        190
+      ]
+    },
+    {
+      "name": "技能 · 4槽",
+      "rect": [
+        1378,
+        639,
+        382,
+        409
+      ]
+    }
+  ],
+  "note_zh": "布局元数据仅记录静态预览，不是可运行 Widget，也未进行 UE 或触控验收。"
+}

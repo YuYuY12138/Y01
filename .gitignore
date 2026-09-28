@@ -1,0 +1,45 @@
+# Unreal Engine 可再生目录与构建产物
+/Binaries/
+/DerivedDataCache/
+/Intermediate/
+/Saved/
+/Plugins/**/Binaries/
+/Plugins/**/Intermediate/
+/Plugins/**/Saved/
+
+# IDE 与个人工作区文件
+/.vs/
+/.idea/
+/.vscode/
+/.qoder/
+*.sln
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.code-workspace
+
+# 开发者临时测试资产与个人集合，保留正式 Playground 资产
+/Content/Developers/
+/Content/Collections/
+
+# 脚本缓存、临时文件与本地敏感配置
+__pycache__/
+*.py[cod]
+.venv/
+*.tmp
+*.bak
+*.log
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+.DS_Store
+Thumbs.db

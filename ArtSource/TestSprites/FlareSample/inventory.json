@@ -1,0 +1,207 @@
+[
+  {
+    "file": "DELIVERY.txt",
+    "bytes": 12550,
+    "sha256": "094d7a61e8f771625c4a73aa5288744129ee84161819d2d5f1721de7e6a819ce"
+  },
+  {
+    "file": "Evidence/cc-by-3.0-legalcode.html",
+    "bytes": 51333,
+    "sha256": "1575ec5fc503cb90e64fc44656704698266747597fe45ca56b0f38d7dfbec782"
+  },
+  {
+    "file": "Evidence/cc-by-3.0.html",
+    "bytes": 32052,
+    "sha256": "655c0b9134ce2be63356976cf1f8a5ab2ca6f4f32acf280ea01604ebe9a1b0b8"
+  },
+  {
+    "file": "Evidence/hero_page.html",
+    "bytes": 68020,
+    "sha256": "ac5bfaac0e4a1f808b3b947572de963e1f3f2f8ef7e7feb96325f324442ce923"
+  },
+  {
+    "file": "Evidence/hero_v014.txt",
+    "bytes": 523,
+    "sha256": "f4e47f0707c7b772eca1c7952c0e8d65b0d0931676e83e0517db129c41cef653"
+  },
+  {
+    "file": "Evidence/misha_page.html",
+    "bytes": 33147,
+    "sha256": "6c98305324fdf9d431aa0694aa0714b5ec1a408b7de20efd2a0b7e257156d6ba"
+  },
+  {
+    "file": "Evidence/skeleton_page.html",
+    "bytes": 32837,
+    "sha256": "a8aed4c575c04c7e690e02c23bafa1daa89485cdd5a8e35db01986950c16eb0c"
+  },
+  {
+    "file": "Evidence/skeleton_v014.txt",
+    "bytes": 586,
+    "sha256": "c22bbc19c06b4f82f592dc3b4607be5a10e529153ca8f743f201441ae6b00b8a"
+  },
+  {
+    "file": "LICENSES_AND_CREDITS.txt",
+    "bytes": 4542,
+    "sha256": "8df5eb3afb57fa57fa7c9d1419f5e9f308b2aa338adfb14832826d934275623b"
+  },
+  {
+    "file": "manifest.json",
+    "bytes": 17068,
+    "sha256": "07fdc4dff3072abeb6ee3a4168829a42b45a63d4c69047c19407bdf0fdcc0c5e"
+  },
+  {
+    "file": "Original/Hero/longsword.png",
+    "bytes": 250198,
+    "sha256": "35ab0fcd21f484efe07c0869239c10ae9713fb25997a3db80fcd66e811bd5aa6"
+  },
+  {
+    "file": "Original/Hero/male_head1.png",
+    "bytes": 160629,
+    "sha256": "27a6c1990d8d612e0949e7d67f86843f9e72bc269495020f98078d632b3c1169"
+  },
+  {
+    "file": "Original/Hero/shield.png",
+    "bytes": 258891,
+    "sha256": "149c260524997e84aa24d14e44ccf21804a1858f6bda2cc4923a6b194d0417d0"
+  },
+  {
+    "file": "Original/Hero/steel_armor.png",
+    "bytes": 960804,
+    "sha256": "4bb2fe321d50257cc1aea21a7ec8cf6e9f16a9564179f0b852043784148ee0bf"
+  },
+  {
+    "file": "Original/isometric_hero.zip",
+    "bytes": 6152847,
+    "sha256": "5379df45ac9bca136a239525459708c981776986bb8da4f4aa3f350a9974d3b7"
+  },
+  {
+    "file": "Original/Skeleton/skeleton_0.png",
+    "bytes": 1990277,
+    "sha256": "6c1fd9a6a514d3319d89edcd6205d212ace3676b42c575e513b2085b16c52f86"
+  },
+  {
+    "file": "Prepared/Hero/Hero_Attack_8Directions.png",
+    "bytes": 110505,
+    "sha256": "d74b4292bb50a52b1939b42e63d0c54073c8dda23b465d38b79e2013eef095fc"
+  },
+  {
+    "file": "Prepared/Hero/Hero_Die_8Directions.png",
+    "bytes": 140369,
+    "sha256": "fd7bdc646b1181bc4f02f03151ed95ae3b450045902d9d0b35106061ab7f2184"
+  },
+  {
+    "file": "Prepared/Hero/Hero_Hit_8Directions.png",
+    "bytes": 51243,
+    "sha256": "dc2970e6ca7f7a0745c3bd039914b040edc308cdd4b5fd21a99250159ba0ddce"
+  },
+  {
+    "file": "Prepared/Hero/Hero_Idle_8Directions.png",
+    "bytes": 101142,
+    "sha256": "f0303b91ef9ea9ae5c155a6a5f18c50a3722bd732b175153499684e7d6339930"
+  },
+  {
+    "file": "Prepared/Hero/Hero_Move_8Directions.png",
+    "bytes": 204983,
+    "sha256": "8e3ff9ee2c763a682997a071ffab9df53d76cca980f561e4cad47fa61bb71968"
+  },
+  {
+    "file": "Prepared/Hero/Hero_SteelSwordShield_Full.png",
+    "bytes": 834522,
+    "sha256": "fc94afdadb08df62bb866306b697446c69302fc3b6fa6771a67a29adb53bb152"
+  },
+  {
+    "file": "Prepared/Skeleton/Skeleton_Attack_8Directions.png",
+    "bytes": 160573,
+    "sha256": "7182d79bb2569ef516366a5217a6609327a0e5f5cb3ba92348b95bd73d686454"
+  },
+  {
+    "file": "Prepared/Skeleton/Skeleton_Die_8Directions.png",
+    "bytes": 200462,
+    "sha256": "e935b88f0833fecbe35db245f7a55344b22f8e8893177eba06feee2c175c37bd"
+  },
+  {
+    "file": "Prepared/Skeleton/Skeleton_Hit_8Directions.png",
+    "bytes": 73782,
+    "sha256": "8c4246121defdd0128eafeeae02e84ec0fa924dd10b85ca94a6a0fbd0cc60776"
+  },
+  {
+    "file": "Prepared/Skeleton/Skeleton_Idle_8Directions.png",
+    "bytes": 154076,
+    "sha256": "1ade973979feed5b47013671a210ab14481cfc872027cedf37a9dd4b2ad98b12"
+  },
+  {
+    "file": "Prepared/Skeleton/Skeleton_Move_8Directions.png",
+    "bytes": 282708,
+    "sha256": "91088439848b448254636aae3478d494c0d16e3f54d6f80bec070abfa8fd0f4d"
+  },
+  {
+    "file": "Preview/Attack_8Directions.gif",
+    "bytes": 474203,
+    "sha256": "79df1d978956efbb27d3fd472342aab0a7584d1fc717f0ceb0bee678c039272c"
+  },
+  {
+    "file": "Preview/Die_8Directions.gif",
+    "bytes": 633584,
+    "sha256": "1e4f6a854483d8059f67f3a20f9b8b4cd8e34de638ac740864f1668e32fa35f4"
+  },
+  {
+    "file": "Preview/Hero_SE_FrameOrder.png",
+    "bytes": 102841,
+    "sha256": "6473a7e0d92a4dcf8ad76d15df3ebdc8ec0dca66235948645dfd90d2f737a26e"
+  },
+  {
+    "file": "Preview/Hit_8Directions.gif",
+    "bytes": 224933,
+    "sha256": "dff74cf28b167718d4d0d605a2e3bf22c3437970d1d31935957752796c405c27"
+  },
+  {
+    "file": "Preview/Idle_8Directions.gif",
+    "bytes": 2821696,
+    "sha256": "a5ace9910d43df32fcf0b2d339954edf47d84686e82854f9a8256e6a933e8d36"
+  },
+  {
+    "file": "Preview/Move_8Directions.gif",
+    "bytes": 933778,
+    "sha256": "f9a9266386677b91ffb2d64db3702deaee319687ebec6228aadf6bb2ba91f53c"
+  },
+  {
+    "file": "Preview/Overview.png",
+    "bytes": 119959,
+    "sha256": "e8296580b014710dbc0744c15acb112b650a87406da50b13f1e4713fc72f0367"
+  },
+  {
+    "file": "Preview/Skeleton_SE_FrameOrder.png",
+    "bytes": 127723,
+    "sha256": "de7753a692cf58aaf4b8fff7f24150b5fbd68d9f79df2018f03e377d0ef96fe8"
+  },
+  {
+    "file": "sources.json",
+    "bytes": 3930,
+    "sha256": "9ce06f0443e2d2dc63b6ef17c8204e0e344d36cf2cdec9c55ddb73ad6c478236"
+  },
+  {
+    "file": "Tools/build_sample.py",
+    "bytes": 12971,
+    "sha256": "c01bb1f726af9b0bb553aecdb18b63c773bca83700a62ed33527b94696cf408a"
+  },
+  {
+    "file": "Tools/download_sources.py",
+    "bytes": 7071,
+    "sha256": "b6acf54729b5a9c93ca7e96b000e79a548842286291509b6d2fc51684b6a17ad"
+  },
+  {
+    "file": "Tools/test_sample.py",
+    "bytes": 3723,
+    "sha256": "a103562e0a5cc27817032385d3fdb35f57f35087c29e12b217c9b9b3027eac05"
+  },
+  {
+    "file": "Tools/verify_sample.py",
+    "bytes": 6217,
+    "sha256": "57f8aae12eb247307518510a4b6da7ace27f83122dccf0ca6136c4c39dfbd4f4"
+  },
+  {
+    "file": "verification.json",
+    "bytes": 898,
+    "sha256": "418e04f3d9ee7fe2c67b004542747f7b67c232949fa1ae471af3029dc026ad56"
+  }
+]
