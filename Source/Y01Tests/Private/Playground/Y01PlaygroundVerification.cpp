@@ -13,6 +13,10 @@
 #include "TimerManager.h"
 #include "InputKeyEventArgs.h"
 #include "EnhancedPlayerInput.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "Engine/NetConnection.h"
+#include "Engine/NetDriver.h"
+#include "HAL/IConsoleManager.h"
 
 bool AY01PlaygroundController::IsVerificationEnabled()
 { return FParse::Param(FCommandLine::Get(), TEXT("Y01PlaygroundVerify")); }
@@ -164,6 +168,111 @@ void AY01PlaygroundController::ClientVerificationFinished_Implementation()
         PlayerState ? PlayerState->GetPlayerId() : -1, bObservedMovement, bObservedDamage, LastObservedCooldown);
     FTimerHandle Handle;
     GetWorldTimerManager().SetTimer(Handle, [] { FPlatformMisc::RequestExitWithStatus(false, 0); }, 2.f, false);
+}
+bool AY01DamageVerification::Enabled() { return FParse::Param(FCommandLine::Get(), TEXT("Y01DamageNetVerify")); }
+AY01DamageVerification::AY01DamageVerification() { PrimaryActorTick.bCanEverTick = true; }
+UY01PlaygroundProfile* AY01DamageVerification::PrepareProfile(UY01PlaygroundProfile* Source)
+{
+    if (!Enabled() || !Source) { return Source; }
+    auto* Profile = DuplicateObject<UY01PlaygroundProfile>(Source, GetTransientPackage());
+    for (auto& Pair : Profile->Tables) { Pair.Value = DuplicateObject<UDataTable>(Pair.Value, Profile); }
+    Profile->bTrainingEnabled = true; Profile->bR34AutoAttackEnabled = false;
+    for (auto& Pair : Profile->Tables[EY01TableKind::Character]->GetRowMap())
+    {
+        auto* Row = reinterpret_cast<FY01CharacterRow*>(Pair.Value);
+        Row->Health = 1000; Row->Armor = 0; Row->HealthRegen = 0; Row->Range = 800; Row->MoveSpeed = 0;
+        Row->InitialEquipment.Reset(); Row->R33TestGrowth.bEnabled = false;
+    }
+    for (auto& Pair : Profile->Tables[EY01TableKind::Monster]->GetRowMap())
+    {
+        auto* Row = reinterpret_cast<FY01MonsterRow*>(Pair.Value);
+        Row->Health = 1000; Row->Armor = 0; Row->HealthRegen = 0; Row->Range = 800; Row->MoveSpeed = 0; Row->Skills.Reset();
+    }
+    for (auto& Pair : Profile->Tables[EY01TableKind::Wave]->GetRowMap())
+    {
+        auto* Row = reinterpret_cast<FY01WaveRow*>(Pair.Value); Row->PreparationSeconds = Row->Type == EY01WaveType::Boss ? 1 : .2f;
+        for (auto& Spawn : Row->Spawns) { Spawn.Count = 2; Spawn.DelaySeconds = 0; }
+    }
+    for (auto& Pair : Profile->Tables[EY01TableKind::TrainingStage]->GetRowMap())
+    {
+        auto* Row = reinterpret_cast<FY01TrainingStageRow*>(Pair.Value); Row->MaxAlive = 2; Row->SpawnInterval = 100;
+        for (auto& Spawn : Row->Spawns) { Spawn.Count = 2; Spawn.DelaySeconds = 0; }
+    }
+    return Profile;
+}
+void AY01DamageVerification::Tick(float DeltaSeconds)
+{
+    Super::Tick(DeltaSeconds);
+    if (!Enabled() || !HasAuthority() || GetNetMode() != NM_DedicatedServer || bFinished) { return; }
+    const double Now = GetWorld()->GetTimeSeconds();
+    if (Now < NextStep) { return; }
+    auto* Mode = GetWorld()->GetAuthGameMode<AY01PlaygroundGameMode>();
+    if (!Mode || !Mode->IsMatchConfigured()) { return; }
+    TArray<AY01PlaygroundController*> PCs;
+    for (TActorIterator<AY01PlaygroundController> It(GetWorld()); It; ++It)
+    { if (Mode->IsPlayerPresent(It->GetPlayerState<AY01PlayerState>()) && It->GetNetConnection()) { PCs.Add(*It); } }
+    if (PCs.Num() != 2) { return; }
+    PCs.Sort([](const auto& A, const auto& B) { return A.PlayerState->GetPlayerId() < B.PlayerState->GetPlayerId(); });
+    auto* A = PCs[0]; auto* B = PCs[1];
+    auto Fail = [&]() { bFinished = true; UE_LOG(LogTemp, Error, TEXT("Y01Damage NET_FAIL Phase=%d"), Phase); };
+    int32 BurstEvents = 8; FParse::Value(FCommandLine::Get(), TEXT("Y01DamageBurstEvents="), BurstEvents);
+    if (BurstEvents != 8 && BurstEvents != 128) { Fail(); return; }
+    auto MonsterFor = [&](AY01PlaygroundController* PC) -> AY01Monster*
+    {
+        const auto* PS = PC->GetPlayerState<AY01PlayerState>();
+        if (Mode->GetTraining()->Observe(PS).bInside)
+        { const auto Monsters = Mode->GetTraining()->Monsters(PS); return Monsters.IsEmpty() ? nullptr : Monsters[0]; }
+        return Mode->GetWaveMonsters().IsEmpty() ? nullptr : Mode->GetWaveMonsters()[0].Get();
+    };
+    auto Emit = [&](AY01PlaygroundController* PC, const TArray<AY01PlaygroundController*>& Recipients)
+    {
+        auto* Monster = MonsterFor(PC); if (!IsValid(Monster)) { Fail(); return; }
+        PC->GetPawn()->SetActorLocation(Monster->GetActorLocation() + FVector(100,0,0));
+        Cast<ACharacter>(PC->GetPawn())->GetCharacterMovement()->DisableMovement(); Monster->GetCharacterMovement()->DisableMovement();
+        auto* Source = PC->GetPlayerState<AY01PlayerState>()->GetCombatASC(); auto* Target = Monster->GetCombatASC();
+        auto* Service = GetWorld()->GetSubsystem<UY01DamageEvents>(); int32 Count = 0;
+        const auto Handle = Service->OnDamageCommitted.AddLambda([&](const FY01DamageEvent& E)
+        {
+            ++Count;
+            for (const auto* Recipient : Recipients)
+            { UE_LOG(LogTemp, Display, TEXT("Y01Damage EXPECT Player=%d Id=%llu Epoch=%s Region=%d Actual=%.9g Phase=%d"),
+                Recipient->PlayerState->GetPlayerId(), E.EventId, *E.WorldEpoch.ToString(EGuidFormats::Digits), E.RegionId, E.ActualDamage, Phase); }
+        });
+        for (int32 I=0; I<BurstEvents / 2; ++I)
+        {
+            for (int32 Direction=0; Direction<2; ++Direction)
+            {
+                auto* S = Direction ? Target : Source; auto* T = Direction ? Source : Target;
+                auto Spec = S->MakeOutgoingSpec(UY01DamageEffect::StaticClass(), 1, S->MakeEffectContext());
+                Spec.Data->SetSetByCallerMagnitude(Y01Tags::Data_Damage, 1); S->ApplyGameplayEffectSpecToTarget(*Spec.Data, T);
+            }
+        }
+        Service->OnDamageCommitted.Remove(Handle); if (Count != BurstEvents) { Fail(); }
+    };
+    UE_LOG(LogTemp, Display, TEXT("Y01Damage NET_PHASE Phase=%d A=%d B=%d"), Phase, A->PlayerState->GetPlayerId(), B->PlayerState->GetPlayerId());
+    if (Phase == 0)
+    {
+        A->SetDamageRegion(0); B->SetDamageRegion(0);
+        const auto* Threshold = IConsoleManager::Get().FindConsoleVariable(TEXT("net.PartialBunchReliableThreshold"));
+        for (const auto* PC : PCs)
+        {
+            const auto* Connection = PC->GetNetConnection(); const auto* Driver = Connection->GetDriver();
+            UE_LOG(LogTemp, Display, TEXT("Y01Damage NET_CONFIG Player=%d MaxPacket=%d MaxSingleBits=%d ReliableThreshold=%d Iris=%d CustomReplication=%d BurstEvents=%d"),
+                PC->PlayerState->GetPlayerId(), Connection->MaxPacket, Connection->GetMaxSingleBunchSizeBits(), Threshold ? Threshold->GetInt() : -1,
+                Driver->IsUsingIrisReplication(), Driver->GetReplicationDriver() != nullptr, BurstEvents);
+        }
+    }
+    if (Phase == 1 && !Mode->TryStartNextWave()) { Fail(); }
+    if (Phase == 2) { Emit(A, {A,B}); if (BurstEvents == 8) { Emit(B, {A,B}); } }
+    if (Phase == 3 && !Mode->GetTraining()->Request(A, true)) { Fail(); }
+    if (Phase == 4) { Emit(A, {A}); Emit(B, {B}); }
+    if (Phase == 5 && !Mode->GetTraining()->Request(B, true)) { Fail(); }
+    if (Phase == 6) { Emit(A, {A}); Emit(B, {B}); }
+    if (Phase == 7 && !Mode->GetTraining()->Request(A, false)) { Fail(); }
+    if (Phase == 8) { Emit(A, {A}); Emit(B, {B}); }
+    if (Phase == 9)
+    { bFinished = true; UE_LOG(LogTemp, Display, TEXT("Y01Damage NET_DONE ExpectedDeliveries=%d"), BurstEvents == 128 ? 1024 : 80); }
+    ++Phase; NextStep = Now + 2;
 }
 AY01PlaygroundVerification::AY01PlaygroundVerification() { PrimaryActorTick.bCanEverTick = true; }
 void AY01PlaygroundVerification::Tick(float DeltaSeconds)

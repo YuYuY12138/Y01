@@ -1,4 +1,5 @@
 #include "Data/Y01DataCatalog.h"
+#include "Combat/Y01DamageEffects.h"
 
 namespace
 {
@@ -28,6 +29,11 @@ const UScriptStruct* Schema(EKind Kind)
     case EKind::MetaItem: return FY01MetaItemRow::StaticStruct();
     case EKind::WarehouseEvent: return FY01WarehouseEventRow::StaticStruct();
     case EKind::TalentChoice: return FY01TalentChoiceRow::StaticStruct();
+    case EKind::SourceEffect: return FY01SourceEffectRow::StaticStruct();
+    case EKind::GrowthRule: return FY01GrowthRuleRow::StaticStruct();
+    case EKind::QualityRollPool: return FY01QualityRollPoolRow::StaticStruct();
+    case EKind::AttributeMapping: return FY01AttributeMappingRow::StaticStruct();
+    case EKind::DamageEffect: return FY01DamageEffectRow::StaticStruct();
     default: return nullptr;
     }
 }
@@ -101,6 +107,62 @@ struct FValidator
         return Row;
     }
 
+    void SourceEffects(const TArray<FY01DataRef>& Refs) const
+    {
+        TSet<FName> Seen;
+        for (int32 Index = 0; Index < Refs.Num(); ++Index)
+        {
+            const auto& Ref = Refs[Index];
+            const FString Field = FString::Printf(TEXT("EffectIds[%d]"), Index);
+            if (const auto* Effect = Reference<FY01SourceEffectRow>(Ref, EKind::SourceEffect, Field))
+            {
+                Check(Source.Type == EKind::Equipment || Effect->Kind == EY01SourceEffectKind::AttackFlat
+                    || Effect->Kind == EY01SourceEffectKind::GoldPerSecond, ECode::Invariant, Field,
+                    TEXT("新属性和映射效果首版仅接通装备，技能天赋及商品不得引用"));
+            }
+            if (Ref.Type == EKind::SourceEffect && !Ref.RowName.IsNone())
+            {
+                Check(!Seen.Contains(Ref.RowName), ECode::DuplicateValue, Field, TEXT("同一内容不能重复引用同一效果ID"));
+                Seen.Add(Ref.RowName);
+            }
+        }
+    }
+
+    void DamageEffects(const TArray<FY01DataRef>& Refs, EY01SkillType Type = EY01SkillType::Passive) const
+    {
+        TSet<FName> Seen;
+        for (int32 I = 0; I < Refs.Num(); ++I)
+        {
+            const auto& Ref = Refs[I]; const FString Field = FString::Printf(TEXT("DamageEffectIds[%d]"), I);
+            Check(!Seen.Contains(Ref.RowName), ECode::DuplicateValue, Field, TEXT("伤害效果ID不得重复")); Seen.Add(Ref.RowName);
+            if (const auto* Row = Reference<FY01DamageEffectRow>(Ref, EKind::DamageEffect, Field))
+            {
+                FY01ItemDamageEffect E; E.EffectId = Ref.RowName; E.Config = *Row;
+                Check(Y01Damage::ValidateSource({E}, Source.Type, Type), ECode::Invariant, Field, TEXT("伤害模板无效或来源发动方式不支持"));
+            }
+        }
+    }
+
+    void GrowthRules(const TArray<FY01DataRef>& Refs) const
+    {
+        TSet<FName> Seen;
+        for (int32 Index = 0; Index < Refs.Num(); ++Index)
+        {
+            const auto& Ref = Refs[Index];
+            const FString Field = FString::Printf(TEXT("GrowthRuleIds[%d]"), Index);
+            if (const auto* Row = Reference<FY01GrowthRuleRow>(Ref, EKind::GrowthRule, Field))
+            {
+                Check(Row->Target != EY01GrowthTarget::EquipmentInstance || Source.Type == EKind::Equipment,
+                    ECode::Invariant, Field, TEXT("装备实例成长只能由装备来源引用"));
+            }
+            if (Ref.Type == EKind::GrowthRule && !Ref.RowName.IsNone())
+            {
+                Check(!Seen.Contains(Ref.RowName), ECode::DuplicateValue, Field, TEXT("同一内容不能重复引用同一成长规则"));
+                Seen.Add(Ref.RowName);
+            }
+        }
+    }
+
     void Item(const FY01DataRef& Ref, EKind Expected, EY01Quality ExpectedQuality, const FString& Field) const
     {
         const EY01Quality* Actual = nullptr;
@@ -161,6 +223,12 @@ struct FValidator
         Number(Row.AttackDamage, TEXT("AttackDamage"));
         Number(Row.Range, TEXT("Range"));
         Number(Row.MoveSpeed, TEXT("MoveSpeed"));
+        Number(Row.AttackInterval, TEXT("AttackInterval"), true);
+        Enum(Row.AttackType, TEXT("AttackType"));
+        Number(Row.MeleeAngle, TEXT("MeleeAngle"), true);
+        Check(Row.MeleeAngle <= 360, ECode::InvalidNumber, TEXT("MeleeAngle"), TEXT("完整扇形角度不能超过360度"));
+        Number(Row.ProjectileSpeed, TEXT("ProjectileSpeed"), true);
+        Number(Row.Armor, TEXT("Armor")); Number(Row.HealthRegen, TEXT("HealthRegen"));
     }
 };
 }
@@ -216,9 +284,22 @@ FY01DataValidation FY01DataCatalog::Validate() const
     // 结构错误先返回，避免在错误结构上解释内存。
     if (!Result.IsValid()) { return Result; }
 
+    // 可选表只允许未登记；已登记的空指针或错误结构仍须报错，并继续定位引用来源。
+    for (EKind Kind : { EKind::SourceEffect, EKind::GrowthRule, EKind::QualityRollPool, EKind::AttributeMapping, EKind::DamageEffect })
+    {
+        if (const UDataTable* const* Table = Tables.Find(Kind))
+        {
+            if (!*Table) { AddDataError(Result, ECode::MissingTable, Identity(Kind), TEXT("Table"), TEXT("可选表已配置但加载失败")); }
+            else if ((*Table)->GetRowStruct() != Schema(Kind))
+            { AddDataError(Result, ECode::WrongSchema, Identity(Kind), TEXT("RowStruct"), TEXT("可选表行结构错误")); }
+        }
+    }
+
     auto Visit = [&]<typename T>(EKind Kind, TFunctionRef<void(const T&, const FValidator&)> Callback)
     {
-        TArray<FName> Names = Tables[Kind]->GetRowNames();
+        const UDataTable* Table = Tables.FindRef(Kind);
+        if (!Table || Table->GetRowStruct() != T::StaticStruct()) { return; }
+        TArray<FName> Names = Table->GetRowNames();
         Names.Sort(FNameLexicalLess());
         for (FName Name : Names)
         {
@@ -226,6 +307,58 @@ FY01DataValidation FY01DataCatalog::Validate() const
             if (const T* Row = FindRow<T>(Source, Result)) { Callback(*Row, FValidator{*this, Result, Source}); }
         }
     };
+    Visit.operator()<FY01SourceEffectRow>(EKind::SourceEffect, [](const auto& Row, const FValidator& V)
+    {
+        V.Enum(Row.Kind, TEXT("Kind"));
+        V.Number(Row.Magnitude, TEXT("Magnitude"));
+        V.Check(Y01Data::ValidSourceEffect(Row), ECode::Invariant, TEXT("Attribute/Amount"), TEXT("效果字段必须匹配种类，仅支持非负有限直接属性或三维到已接通衍生的系数"));
+    });
+    Visit.operator()<FY01DamageEffectRow>(EKind::DamageEffect, [](const auto& Row, const FValidator& V)
+    {
+        V.Enum(Row.Trigger, TEXT("Trigger")); V.Enum(Row.Targeting, TEXT("Targeting")); V.Enum(Row.Order, TEXT("Order"));
+        V.Enum(Row.Center, TEXT("Center")); V.Enum(Row.Product, TEXT("Product")); V.Enum(Row.Position, TEXT("Position")); V.Enum(Row.Stacking, TEXT("Stacking"));
+        V.Number(Row.SearchRadius, TEXT("SearchRadius")); V.Number(Row.Radius, TEXT("Radius")); V.Number(Row.FixedDamage, TEXT("FixedDamage"));
+        V.Number(Row.PeriodSeconds, TEXT("PeriodSeconds"), Row.Trigger == EY01DamageTrigger::Periodic);
+        V.Number(Row.Lifetime, TEXT("Lifetime")); V.Number(Row.TickSeconds, TEXT("TickSeconds")); V.Number(Row.Speed, TEXT("Speed"));
+        V.Check(Row.IsValid(), ECode::Invariant, TEXT("DamageEffect"), TEXT("伤害模板的公式、时间、产物、位置或叠加组合无效"));
+    });
+    Visit.operator()<FY01AttributeMappingRow>(EKind::AttributeMapping, [](const auto& Row, const FValidator& V)
+    {
+        V.Check(Row.IsValid(), ECode::Invariant, TEXT("SourceAttribute/TargetAttribute/Coefficient"), TEXT("映射只允许三维到已接通衍生，系数须有限非负"));
+    });
+    Visit.operator()<FY01GrowthRuleRow>(EKind::GrowthRule, [](const auto& Row, const FValidator& V)
+    {
+        V.Enum(Row.Trigger, TEXT("Trigger")); V.Enum(Row.Target, TEXT("Target")); V.Enum(Row.Attribute, TEXT("Attribute"));
+        V.Number(Row.Delta, TEXT("Delta"));
+        V.Check((Row.Target == EY01GrowthTarget::EquipmentInstance && Row.Attribute == EY01GrowthAttribute::AttackDamage)
+            || (Row.Target == EY01GrowthTarget::Player && Row.Attribute == EY01GrowthAttribute::Strength),
+            ECode::Invariant, TEXT("Attribute"), TEXT("成长仅允许装备实例攻击力或玩家力量"));
+    });
+    Visit.operator()<FY01QualityRollPoolRow>(EKind::QualityRollPool, [](const auto& Row, const FValidator& V)
+    {
+        V.Check(IsLocalItem(Row.ItemType), ECode::TypeMismatch, TEXT("ItemType"), TEXT("品质抽样池仅支持装备或技能"));
+        V.Check(!Row.Entries.IsEmpty(), ECode::InvalidPool, TEXT("Entries"), TEXT("品质抽样池不能为空"));
+        TSet<EY01Quality> Seen;
+        double Total = 0;
+        for (int32 Index = 0; Index < Row.Entries.Num(); ++Index)
+        {
+            const auto& Entry = Row.Entries[Index];
+            const FString Field = FString::Printf(TEXT("Entries[%d]"), Index);
+            V.Quality(Entry.Quality, Field + TEXT(".Quality"));
+            V.Check(!Seen.Contains(Entry.Quality), ECode::DuplicateValue, Field + TEXT(".Quality"), TEXT("品质抽样池内品质不得重复"));
+            Seen.Add(Entry.Quality);
+            V.Number(Entry.Weight, Field + TEXT(".Weight"));
+            Total += Entry.Weight;
+            if (const auto* Pool = V.Reference<FY01LocalItemPoolRow>(Entry.Pool, EKind::LocalItemPool, Field + TEXT(".Pool")))
+            {
+                V.Check(IsLocalItem(Pool->ItemType) && Pool->ItemType == Row.ItemType,
+                    ECode::TypeMismatch, Field + TEXT(".Pool.ItemType"), TEXT("品质条目引用池须与物品类型一致"));
+                V.Quality(Pool->Quality, Field + TEXT(".Pool.Quality"));
+                V.Check(Pool->Quality == Entry.Quality, ECode::QualityMismatch, Field + TEXT(".Pool.Quality"), TEXT("品质条目引用池须与品质一致"));
+            }
+        }
+        V.Check(FMath::IsFinite(Total) && Total > 0, ECode::InvalidPool, TEXT("Entries"), TEXT("品质池总权重必须有限且大于零"));
+    });
     TSet<EY01Quality> Qualities;
     Visit.operator()<FY01QualityRow>(EKind::Quality, [&](const auto& Row, const FValidator& V)
     {
@@ -243,12 +376,52 @@ FY01DataValidation FY01DataCatalog::Validate() const
     Visit.operator()<FY01SkillRow>(EKind::Skill, [](const auto& Row, const FValidator& V)
     {
         V.Enum(Row.Type, TEXT("Type")); V.Quality(Row.Quality); V.Number(Row.CooldownSeconds, TEXT("CooldownSeconds"));
+        V.Check(Row.TestSkill.IsValid(), ECode::InvalidNumber, TEXT("TestSkill"), TEXT("程序测试技能配置须有限、非负，启用的几何与持续时间须为正"));
+        V.Check(Row.TestSkill.Mode == EY01TestSkillMode::None || Row.Type == EY01SkillType::Active,
+            ECode::Invariant, TEXT("TestSkill.Mode"), TEXT("程序测试攻击必须是主动技能"));
+        V.SourceEffects(Row.EffectIds);
+        V.GrowthRules(Row.GrowthRuleIds); V.DamageEffects(Row.DamageEffectIds, Row.Type);
+        V.Check(Row.DamageEffectIds.IsEmpty() || Row.TestSkill.Mode == EY01TestSkillMode::None,
+            ECode::Invariant, TEXT("TestSkill"), TEXT("共享伤害模板不能混入旧测试攻击"));
+        if (Row.Type == EY01SkillType::Active)
+        { V.Check((!Row.DamageEffectIds.IsEmpty()) == (Row.Ability.ToSoftObjectPath() == FSoftObjectPath(UY01DamageAbility::StaticClass())),
+            ECode::Invariant, TEXT("Ability"), TEXT("主动伤害效果必须且只能使用原生DamageAbility")); }
+        if (!Row.EffectIds.IsEmpty() || !Row.GrowthRuleIds.IsEmpty() || !Row.DamageEffectIds.IsEmpty())
+        {
+            V.Check(Row.Effect.IsNull(), ECode::Invariant, TEXT("Effect"), TEXT("效果ID不能与旧技能Effect混填"));
+            if (Row.Type == EY01SkillType::Active)
+            {
+                V.Check(!Row.Ability.IsNull(), ECode::Invariant, TEXT("Ability"), TEXT("带效果ID的主动技能仍须配置Ability"));
+            }
+            else if (Row.Type == EY01SkillType::Passive)
+            {
+                V.Check(Row.Ability.IsNull(), ECode::Invariant, TEXT("Ability"), TEXT("效果ID被动技能不能混填Ability"));
+                V.Check(Row.CooldownSeconds == 0, ECode::Invariant, TEXT("CooldownSeconds"), TEXT("效果ID被动技能冷却须为零"));
+            }
+        }
     });
     Visit.operator()<FY01EquipmentRow>(EKind::Equipment, [](const auto& Row, const FValidator& V)
     {
-        V.Quality(Row.Quality);
+        V.Quality(Row.Quality); V.Number(Row.AttackBonus, TEXT("AttackBonus"));
+        V.SourceEffects(Row.EffectIds);
+        V.GrowthRules(Row.GrowthRuleIds); V.DamageEffects(Row.DamageEffectIds);
+        if (!Row.EffectIds.IsEmpty() || !Row.GrowthRuleIds.IsEmpty() || !Row.DamageEffectIds.IsEmpty())
+        {
+            V.Check(Row.AttackBonus == 0, ECode::Invariant, TEXT("AttackBonus"), TEXT("效果ID装备的旧AttackBonus须为零"));
+            V.Check(Row.Effect.IsNull(), ECode::Invariant, TEXT("Effect"), TEXT("效果ID不能与旧装备Effect混填"));
+        }
     });
-    Visit.operator()<FY01TalentRow>(EKind::Talent, [](const auto& Row, const FValidator& V) { V.Quality(Row.Quality); });
+    Visit.operator()<FY01TalentRow>(EKind::Talent, [](const auto& Row, const FValidator& V)
+    {
+        V.Quality(Row.Quality);
+        V.SourceEffects(Row.EffectIds);
+        V.GrowthRules(Row.GrowthRuleIds);
+        if (!Row.EffectIds.IsEmpty() || !Row.GrowthRuleIds.IsEmpty())
+        {
+            V.Check(Row.Ability.IsNull(), ECode::Invariant, TEXT("Ability"), TEXT("效果ID不能与旧天赋Ability混填"));
+            V.Check(Row.Effect.IsNull(), ECode::Invariant, TEXT("Effect"), TEXT("效果ID不能与旧天赋Effect混填"));
+        }
+    });
     Visit.operator()<FY01MetaItemRow>(EKind::MetaItem, [](const auto& Row, const FValidator& V) { V.Quality(Row.Quality); });
     Visit.operator()<FY01LocalItemPoolRow>(EKind::LocalItemPool, [](const auto& Row, const FValidator& V)
     {
@@ -291,16 +464,60 @@ FY01DataValidation FY01DataCatalog::Validate() const
     Visit.operator()<FY01MonsterRow>(EKind::Monster, [](const auto& Row, const FValidator& V)
     {
         V.Stats(Row); V.Number(Row.Experience, TEXT("Experience")); V.Number(Row.Gold, TEXT("Gold"));
+        V.Number(Row.DetectionRadius, TEXT("DetectionRadius"));
         for (int32 I = 0; I < Row.Skills.Num(); ++I)
         {
             V.Reference<FY01SkillRow>(Row.Skills[I], EKind::Skill, FString::Printf(TEXT("Skills[%d]"), I));
         }
-        V.Reference<FY01RewardPackageRow>(Row.DropReward, EKind::RewardPackage, TEXT("DropReward"));
+        V.Number(Row.ItemDropChance, TEXT("ItemDropChance"));
+        V.Check(Row.ItemDropChance <= 1, ECode::InvalidNumber, TEXT("ItemDropChance"), TEXT("物品掉率不得超过1"));
+        if (const auto* Reward = V.Reference<FY01RewardPackageRow>(Row.DropReward, EKind::RewardPackage, TEXT("DropReward")))
+        {
+            if (Row.ItemDropChance > 0)
+            {
+                V.Check(Reward->Domain == EY01RewardDomain::MatchPersonal, ECode::Invariant, TEXT("DropReward.Domain"), TEXT("物品掉落奖励必须属于局内个人"));
+                V.Check(Reward->Gold == 0, ECode::Invariant, TEXT("DropReward.Gold"), TEXT("物品掉落奖励不得附带金币"));
+                V.Check(Reward->Experience == 0, ECode::Invariant, TEXT("DropReward.Experience"), TEXT("物品掉落奖励不得附带经验"));
+                V.Check(!Reward->Items.IsEmpty(), ECode::Invariant, TEXT("DropReward.Items"), TEXT("正物品掉率要求奖励物品非空"));
+            }
+        }
     });
     float MaxNormalPreparation = -1;
     Visit.operator()<FY01WaveRow>(EKind::Wave, [&](const auto& Row, const FValidator& V)
     {
-        V.Enum(Row.Type, TEXT("Type")); V.Number(Row.PreparationSeconds, TEXT("PreparationSeconds")); V.Spawns(Row.Spawns);
+        V.Enum(Row.Type, TEXT("Type")); V.Number(Row.PreparationSeconds, TEXT("PreparationSeconds"));
+        V.Number(Row.RespawnSeconds, TEXT("RespawnSeconds"), true);
+        V.Enum(Row.Schedule, TEXT("Schedule"));
+        int64 Total = 0;
+        if (Row.Schedule == EY01WaveSchedule::Legacy)
+        {
+            V.Check(Row.Batches.IsEmpty(), ECode::Invariant, TEXT("Batches"), TEXT("Legacy只消费Spawns，禁止混填Batches"));
+            V.Spawns(Row.Spawns);
+            for (const auto& Entry : Row.Spawns) { Total += Entry.Count; }
+        }
+        else if (Row.Schedule == EY01WaveSchedule::Batches)
+        {
+            V.Check(Row.Spawns.IsEmpty(), ECode::Invariant, TEXT("Spawns"), TEXT("Batches只消费Batches，禁止混填Spawns"));
+            V.Check(!Row.Batches.IsEmpty(), ECode::InvalidPool, TEXT("Batches"), TEXT("批次列表不能为空"));
+            TSet<FName> Ids;
+            for (int32 I = 0; I < Row.Batches.Num(); ++I)
+            {
+                const auto& B = Row.Batches[I];
+                const FString Field = FString::Printf(TEXT("Batches[%d](%s)"), I, *B.BatchId.ToString());
+                V.Check(!B.BatchId.IsNone() && !Ids.Contains(B.BatchId), ECode::DuplicateValue, Field + TEXT(".BatchId"), TEXT("批次ID不能为空或波内重复"));
+                Ids.Add(B.BatchId); V.Number(B.OffsetSeconds, Field + TEXT(".OffsetSeconds")); V.Enum(B.PointKind, Field + TEXT(".PointKind"));
+                V.Check(Y01Data::ValidSpawnPointTag(B.PointKind, B.PointTag), ECode::Invariant, Field + TEXT(".PointTag"),
+                    TEXT("Normal点须为无前导零的正int32数字Tag，Boss点须为Boss类型和Boss Tag"));
+                V.Check(!B.Monsters.IsEmpty(), ECode::InvalidPool, Field + TEXT(".Monsters"), TEXT("批次怪物列表不能为空"));
+                for (int32 J = 0; J < B.Monsters.Num(); ++J)
+                {
+                    const auto& M = B.Monsters[J]; const FString Item = Field + FString::Printf(TEXT(".Monsters[%d]"), J);
+                    V.Reference<FY01MonsterRow>(M.Monster, EKind::Monster, Item + TEXT(".Monster"));
+                    V.Number(M.Count, Item + TEXT(".Count"), true); Total += M.Count;
+                }
+            }
+        }
+        V.Check(Total > 0 && Total <= MAX_int32, ECode::InvalidNumber, TEXT("Count"), TEXT("每波总Count须为正int32，人数不参与计算"));
         V.Reference<FY01RewardPackageRow>(Row.Reward, EKind::RewardPackage, TEXT("Reward"));
         if (Row.Type == EY01WaveType::Normal && FMath::IsFinite(Row.PreparationSeconds))
         {
@@ -333,6 +550,8 @@ FY01DataValidation FY01DataCatalog::Validate() const
     {
         V.Number(Row.Stage, TEXT("Stage"), true); V.Spawns(Row.Spawns);
         V.Number(Row.StartSeconds, TEXT("StartSeconds"));
+        V.Number(Row.SpawnInterval, TEXT("SpawnInterval"), true);
+        V.Check(Row.MaxAlive > 0 && Row.MaxAlive <= 256, ECode::InvalidNumber, TEXT("MaxAlive"), TEXT("训练存活上限须为1至256"));
         V.Check(!Stages.Contains(Row.Stage), ECode::DuplicateValue, TEXT("Stage"), TEXT("训练阶段编号重复")); Stages.Add(Row.Stage);
         V.Reference<FY01RewardPackageRow>(Row.Reward, EKind::RewardPackage, TEXT("Reward"));
         if (FMath::IsFinite(Row.StartSeconds) && Row.StartSeconds >= 0)
@@ -365,6 +584,27 @@ FY01DataValidation FY01DataCatalog::Validate() const
     Visit.operator()<FY01MatchRulesRow>(EKind::MatchRules, [&](const auto& Row, const FValidator& V)
     {
         V.Number(Row.MaxLevel, TEXT("MaxLevel"), true);
+        V.Number(Row.Core.MaxHealth, TEXT("Core.MaxHealth"), true);
+        V.Number(Row.Core.HealthRegen, TEXT("Core.HealthRegen"));
+        V.Number(Row.Core.HitAlertInterval, TEXT("Core.HitAlertInterval"), true);
+        V.Number(Row.Core.CriticalHealthRatio, TEXT("Core.CriticalHealthRatio"), true);
+        V.Check(Row.Core.CriticalHealthRatio <= 1, ECode::InvalidNumber, TEXT("Core.CriticalHealthRatio"), TEXT("危急生命比例不能大于1"));
+        // 空引用表示该行不承担正式启动入口；运行时正式入口另行要求角色存在。
+        if (Row.Startup.Character.Type != EKind::None || !Row.Startup.Character.RowName.IsNone())
+        { V.Reference<FY01CharacterRow>(Row.Startup.Character, EKind::Character, TEXT("Startup.Character")); }
+        if (Row.Startup.TalentChoice.Type != EKind::None || !Row.Startup.TalentChoice.RowName.IsNone())
+        { V.Reference<FY01TalentChoiceRow>(Row.Startup.TalentChoice, EKind::TalentChoice, TEXT("Startup.TalentChoice")); }
+        V.Number(Row.Startup.InitialGold, TEXT("Startup.InitialGold"));
+        V.Number(Row.Startup.BaseGoldPerSecond, TEXT("Startup.BaseGoldPerSecond"));
+        V.Number(Row.Startup.DropFlightSeconds, TEXT("Startup.DropFlightSeconds"));
+        auto Color = [&](const FLinearColor& C, const TCHAR* Field)
+        {
+            V.Check(FMath::IsFinite(C.R) && FMath::IsFinite(C.G) && FMath::IsFinite(C.B) && FMath::IsFinite(C.A),
+                ECode::InvalidNumber, Field, TEXT("颜色分量必须有限"));
+        };
+        Color(Row.Presentation.DamageColor, TEXT("Presentation.DamageColor"));
+        Color(Row.Presentation.HealingColor, TEXT("Presentation.HealingColor"));
+        V.Number(Row.Presentation.RegenMergeSeconds, TEXT("Presentation.RegenMergeSeconds"), true);
         // 最多检查已配置等级数加一，防止异常 MaxLevel 造成无界遍历。
         const int64 Limit = FMath::Min<int64>(Row.MaxLevel, static_cast<int64>(Levels.Num()) + 1);
         for (int64 Level = 1; Level <= Limit; ++Level)
@@ -379,6 +619,10 @@ FY01DataValidation FY01DataCatalog::Validate() const
     Visit.operator()<FY01CharacterRow>(EKind::Character, [](const auto& Row, const FValidator& V)
     {
         V.Stats(Row);
+        V.Number(Row.Strength, TEXT("Strength")); V.Number(Row.Agility, TEXT("Agility")); V.Number(Row.Wisdom, TEXT("Wisdom"));
+        V.Number(Row.R33TestGrowth.AttackPerEffectiveSecond, TEXT("R33TestGrowth.AttackPerEffectiveSecond"));
+        V.Number(Row.R33TestGrowth.AttackPerEffectiveKill, TEXT("R33TestGrowth.AttackPerEffectiveKill"));
+        V.Number(Row.R33TestGrowth.GoldPerEffectiveSecond, TEXT("R33TestGrowth.GoldPerEffectiveSecond"));
         V.Check(Row.InitialEquipment.Num() <= Y01Data::EquipmentSlotCount, ECode::Invariant, TEXT("InitialEquipment"), TEXT("装备不能超过六槽"));
         V.Check(Row.InitialSkills.Num() <= Y01Data::SkillSlotCount, ECode::Invariant, TEXT("InitialSkills"), TEXT("技能不能超过四槽"));
         for (int32 I = 0; I < Row.InitialEquipment.Num(); ++I)
@@ -392,12 +636,42 @@ FY01DataValidation FY01DataCatalog::Validate() const
     });
     Visit.operator()<FY01ShopOfferRow>(EKind::ShopOffer, [](const auto& Row, const FValidator& V)
     {
-        V.Number(Row.Price, TEXT("Price")); V.Number(Row.Quantity, TEXT("Quantity"), true); V.Quality(Row.Quality);
-        if (const auto* Pool = V.Reference<FY01LocalItemPoolRow>(Row.Pool, EKind::LocalItemPool, TEXT("Pool")))
+        V.Enum(Row.ShopKind, TEXT("ShopKind"));
+        V.Number(Row.Price, TEXT("Price")); V.Quality(Row.Quality);
+        V.SourceEffects(Row.EffectIds);
+        V.GrowthRules(Row.GrowthRuleIds);
+        if (Row.ShopKind == EY01ShopKind::DirectEffect)
         {
-            V.Check(IsLocalItem(Pool->ItemType), ECode::TypeMismatch, TEXT("Pool.ItemType"), TEXT("商店产物池须为装备或技能池"));
-            V.Quality(Pool->Quality, TEXT("Pool.Quality"));
-            V.Check(Pool->Quality == Row.Quality, ECode::QualityMismatch, TEXT("Pool.Quality"), TEXT("商店产物池品质须与标示品质一致"));
+            V.Check(!Row.EffectIds.IsEmpty() || !Row.GrowthRuleIds.IsEmpty(), ECode::Invariant, TEXT("EffectIds"), TEXT("直接效果商品须配置效果ID或成长规则"));
+            V.Check(Row.TierPool.Type == EKind::None && Row.TierPool.RowName.IsNone(), ECode::Invariant, TEXT("TierPool"), TEXT("直接效果商品的TierPool须完全为空"));
+            V.Check(Row.Pool.Type == EKind::None && Row.Pool.RowName.IsNone(), ECode::Invariant, TEXT("Pool"), TEXT("直接效果商品的Pool类型与行名须完全为空"));
+            V.Check(Row.Quantity == 1, ECode::Invariant, TEXT("Quantity"), TEXT("直接效果商品数量须为1"));
+            V.Check(Row.Quality == EY01Quality::Green, ECode::Invariant, TEXT("Quality"), TEXT("直接效果商品须以Green作为中性占位品质，不进行品质抽样"));
+        }
+        else if (Row.ShopKind == EY01ShopKind::RandomPool)
+        {
+            V.Check(Row.EffectIds.IsEmpty(), ECode::Invariant, TEXT("EffectIds"), TEXT("随机池商品不能配置直接效果ID"));
+            V.Check(Row.GrowthRuleIds.IsEmpty(), ECode::Invariant, TEXT("GrowthRuleIds"), TEXT("随机池商品不能配置成长规则"));
+            V.Check(Row.TierPool.Type == EKind::None && Row.TierPool.RowName.IsNone(), ECode::Invariant, TEXT("TierPool"), TEXT("随机池商品的TierPool须完全为空"));
+            V.Number(Row.Quantity, TEXT("Quantity"), true);
+            if (const auto* Pool = V.Reference<FY01LocalItemPoolRow>(Row.Pool, EKind::LocalItemPool, TEXT("Pool")))
+            {
+                V.Check(IsLocalItem(Pool->ItemType), ECode::TypeMismatch, TEXT("Pool.ItemType"), TEXT("商店产物池须为装备或技能池"));
+                V.Quality(Pool->Quality, TEXT("Pool.Quality"));
+                V.Check(Pool->Quality == Row.Quality, ECode::QualityMismatch, TEXT("Pool.Quality"), TEXT("商店产物池品质须与标示品质一致"));
+            }
+        }
+        else if (Row.ShopKind == EY01ShopKind::RandomTier)
+        {
+            V.Check(Row.Pool.Type == EKind::None && Row.Pool.RowName.IsNone(), ECode::Invariant, TEXT("Pool"), TEXT("随机品质商品的旧Pool须完全为空"));
+            V.Check(Row.EffectIds.IsEmpty(), ECode::Invariant, TEXT("EffectIds"), TEXT("随机品质商品不能配置直接效果ID"));
+            V.Check(Row.GrowthRuleIds.IsEmpty(), ECode::Invariant, TEXT("GrowthRuleIds"), TEXT("随机品质商品不能配置成长规则"));
+            V.Check(Row.Quality == EY01Quality::Green, ECode::Invariant, TEXT("Quality"), TEXT("随机品质商品须以Green作为中性占位品质"));
+            V.Number(Row.Quantity, TEXT("Quantity"), true);
+            if (const auto* Pool = V.Reference<FY01QualityRollPoolRow>(Row.TierPool, EKind::QualityRollPool, TEXT("TierPool")))
+            {
+                V.Check(IsLocalItem(Pool->ItemType), ECode::TypeMismatch, TEXT("TierPool.ItemType"), TEXT("商品品质池须为装备或技能类型"));
+            }
         }
     });
     Visit.operator()<FY01SynthesisRow>(EKind::Synthesis, [](const auto& Row, const FValidator& V)
@@ -476,4 +750,54 @@ bool FY01DataCatalog::SamplePool(const FY01DataRef& Pool, FRandomStream& Random,
     // 仅防护浮点舍入；永不退回零权重项。
     OutItem = LastPositive->Item;
     return true;
+}
+
+TArray<FY01DataRef> FY01DataCatalog::CollectEnabled(EY01TableKind Kind, FY01DataValidation& OutErrors) const
+{
+    TArray<FY01DataRef> Result;
+    const bool bSupported = Kind == EKind::ShopOffer || Kind == EKind::Synthesis || Kind == EKind::Wave
+        || Kind == EKind::AttributeMapping || Kind == EKind::Equipment || Kind == EKind::Skill;
+    if (!bSupported)
+    {
+        AddDataError(OutErrors, ECode::InvalidEnum, Identity(Kind), TEXT("Kind"), TEXT("该表不支持正式入口扫描"));
+        return Result;
+    }
+    const UDataTable* const* Table = Tables.Find(Kind);
+    if (!Table)
+    {
+        // 可选映射表未登记即无基础映射；其余正式扫描表必须存在。
+        if (Kind != EKind::AttributeMapping) { AddDataError(OutErrors, ECode::MissingTable, Identity(Kind), TEXT("Table"), TEXT("正式数据表缺失")); }
+        return Result;
+    }
+    if (!*Table) { AddDataError(OutErrors, ECode::MissingTable, Identity(Kind), TEXT("Table"), TEXT("正式数据表加载失败")); return Result; }
+    if ((*Table)->GetRowStruct() != Schema(Kind)) { AddDataError(OutErrors, ECode::WrongSchema, Identity(Kind), TEXT("RowStruct"), TEXT("数据表行结构错误")); return Result; }
+    struct FEntry { int32 Order; FName Name; };
+    TArray<FEntry> Entries;
+    for (const auto& Pair : (*Table)->GetRowMap())
+    {
+        if (!Pair.Value) { continue; }
+        const uint8* Row = Pair.Value;
+        switch (Kind)
+        {
+        case EKind::ShopOffer:
+            if (const auto* R = reinterpret_cast<const FY01ShopOfferRow*>(Row); R->Enabled) { Entries.Add({R->SortOrder, Pair.Key}); }
+            break;
+        case EKind::Synthesis:
+            if (const auto* R = reinterpret_cast<const FY01SynthesisRow*>(Row); R->Enabled) { Entries.Add({R->SortOrder, Pair.Key}); }
+            break;
+        case EKind::Wave:
+            if (const auto* R = reinterpret_cast<const FY01WaveRow*>(Row); R->Enabled) { Entries.Add({R->Order, Pair.Key}); }
+            break;
+        case EKind::AttributeMapping:
+            if (reinterpret_cast<const FY01AttributeMappingRow*>(Row)->bBaseEnabled) { Entries.Add({0, Pair.Key}); }
+            break;
+        default: Entries.Add({0, Pair.Key}); break;
+        }
+    }
+    Entries.Sort([](const FEntry& A, const FEntry& B)
+    {
+        return A.Order != B.Order ? A.Order < B.Order : FNameLexicalLess()(A.Name, B.Name);
+    });
+    for (const auto& Entry : Entries) { Result.Add(Identity(Kind, Entry.Name)); }
+    return Result;
 }

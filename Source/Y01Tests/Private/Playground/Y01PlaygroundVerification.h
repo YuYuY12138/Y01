@@ -14,3 +14,20 @@ private:
     bool bFinished = false;
     double NextAdvance = 0;
 };
+
+class UY01PlaygroundProfile;
+// 独立伤害联网验收；只修改瞬态副本，不复用legacy技能验收结论。
+UCLASS()
+class AY01DamageVerification : public AActor
+{
+    GENERATED_BODY()
+public:
+    AY01DamageVerification();
+    static bool Enabled();
+    static UY01PlaygroundProfile* PrepareProfile(UY01PlaygroundProfile* Source);
+    virtual void Tick(float DeltaSeconds) override;
+private:
+    int32 Phase = 0;
+    double NextStep = 0;
+    bool bFinished = false;
+};

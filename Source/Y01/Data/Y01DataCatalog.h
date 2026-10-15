@@ -41,6 +41,9 @@ public:
     // 失败时清空输出，且不消耗随机流；成功仅返回静态身份，不写入表。
     bool SamplePool(const FY01DataRef& Pool, FRandomStream& Random, FY01DataRef& OutItem, FY01DataValidation& OutErrors) const;
 
+    // 正式入口扫描：商品/合成按Enabled+SortOrder，波次按Enabled+Order，映射按bBaseEnabled，装备/技能为全部行；同序按RowName稳定排序。
+    TArray<FY01DataRef> CollectEnabled(EY01TableKind Kind, FY01DataValidation& OutErrors) const;
+
 private:
     const void* FindRaw(const FY01DataRef& Ref, const UScriptStruct* Expected, FY01DataValidation& OutErrors) const;
     FY01TableMap Tables;

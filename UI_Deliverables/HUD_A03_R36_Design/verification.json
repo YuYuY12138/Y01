@@ -1,0 +1,14 @@
+{
+  "scope": "静态坐标、文案和文件完整性，不是真机、触控命中或UE验收",
+  "tests_run": 10,
+  "failures": 0,
+  "errors": 0,
+  "panel_drop_target_overlap_px2": 0,
+  "button_slot_min_artboard_side_px": 88,
+  "excluded": [
+    "三角标题实际触摸热区",
+    "字体真机可读性",
+    "响应式运行布局",
+    "联网与业务逻辑"
+  ]
+}

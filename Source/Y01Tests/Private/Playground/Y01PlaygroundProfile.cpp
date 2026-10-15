@@ -34,5 +34,18 @@ FY01DataValidation UY01PlaygroundProfile::Validate() const
     {
         Reference.operator()<FY01WaveRow>(OrderedWaves[Index], EY01TableKind::Wave, FString::Printf(TEXT("OrderedWaves[%d]"), Index));
     }
+    if (bTrainingEnabled && Result.IsValid())
+    {
+        const UDataTable* Table = Tables.FindRef(EY01TableKind::TrainingStage);
+        for (const FName Name : Table->GetRowNames())
+        {
+            FY01DataRef Ref; Ref.Type = EY01TableKind::TrainingStage; Ref.RowName = Name;
+            const auto* Row = Catalog.FindRow<FY01TrainingStageRow>(Ref, Result);
+            const auto* Reward = Row ? Catalog.FindRow<FY01RewardPackageRow>(Row->Reward, Result) : nullptr;
+            if (Reward && (Reward->Domain != EY01RewardDomain::MatchPersonal || !Reward->Items.IsEmpty()))
+            { Result.Errors.Add({EY01DataErrorCode::Invariant, Ref, TEXT("Reward"), TEXT("本单元训练仅支持个人金币经验，物品奖励尚不支持")}); }
+        }
+    }
+    ValidateExtension(Result);
     return Result;
 }

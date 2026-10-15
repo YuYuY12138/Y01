@@ -18,7 +18,7 @@ IMPLEMENT_COMPLEX_AUTOMATION_TEST(FY01PlaygroundMapTest, "Y01.Playground.Map",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 void FY01PlaygroundMapTest::GetTests(TArray<FString>& Names, TArray<FString>& Commands) const
 {
-    for (const TCHAR* Name : { TEXT("SavedWorldAndPreserve"), TEXT("ValidateRequiresMap"), TEXT("FreshProcess"), TEXT("ReloadRuntime") })
+    for (const TCHAR* Name : { TEXT("SavedWorldAndPreserve"), TEXT("ValidateRequiresMap"), TEXT("FreshProcess"), TEXT("ReloadRuntime"), TEXT("RejectNonLegacyVerify") })
     { Names.Add(Name); Commands.Add(Name); }
 }
 bool FY01PlaygroundMapTest::RunTest(const FString& Case)
@@ -50,8 +50,14 @@ bool FY01PlaygroundMapTest::RunTest(const FString& Case)
     TArray<uint8> Before, After; FFileHelper::LoadFileToArray(Before, *Filename);
     TestEqual(TEXT("重复WithMap不覆盖"), Command->Main(TEXT("-Root=") + Root + TEXT(" -WithMap")), 0);
     FFileHelper::LoadFileToArray(After, *Filename); TestTrue(TEXT("地图字节保留"), Before == After);
-    if (Case == TEXT("ReloadRuntime"))
+    if (Case == TEXT("ReloadRuntime") || Case == TEXT("RejectNonLegacyVerify"))
     {
+        if (Case == TEXT("RejectNonLegacyVerify"))
+        {
+            const FString Legacy = Root + TEXT("_Legacy");
+            if (!TestEqual(TEXT("先隔离旧即时配置"), Command->Main(TEXT("-Root=") + Root + TEXT(" -SkillLegacyCopy -CopyRoot=") + Legacy), 0)) { return false; }
+            if (!TestEqual(TEXT("真实升级为新机制"), Command->Main(TEXT("-Root=") + Root + TEXT(" -SkillUpgrade -LegacyRoot=") + Legacy), 0)) { return false; }
+        }
         auto* Characters = Data.Profile->Tables[EY01TableKind::Character].Get();
         auto* Rewards = Data.Profile->Tables[EY01TableKind::RewardPackage].Get();
         Characters->FindRow<FY01CharacterRow>(TEXT("Default"), TEXT("ReloadProbe"))->Health = 321;
@@ -74,6 +80,14 @@ bool FY01PlaygroundMapTest::RunTest(const FString& Case)
         else { FPlatformProcess::GetProcReturnCode(Child, &Exit); }
         FPlatformProcess::CloseProc(Child);
         FString Log; FFileHelper::LoadFileToString(Log, *LogFile); AddInfo(LogFile);
+        if (Case == TEXT("RejectNonLegacyVerify"))
+        {
+            TestEqual(TEXT("旧Verify对新技能必须明确失败退出"), Exit, 1);
+            TestTrue(TEXT("失败说明只能使用legacy即时配置"), Log.Contains(TEXT("LEGACY_VERIFY_REJECT")));
+            TestFalse(TEXT("不得误报新技能通过旧验收"), Log.Contains(TEXT("VERIFY_CLIENT_PASS")));
+            return true;
+        }
+        TestTrue(TEXT("旧改表验收明确标识legacy"), Log.Contains(TEXT("LEGACY_VERIFY_ONLY")));
         TestEqual(TEXT("新游戏正常结束验证"), Exit, 0);
         TestTrue(TEXT("玩家ASC读取改后HP321"), Log.Contains(TEXT("HP=321 Attack=25")));
         TestTrue(TEXT("真实结算改后Gold98和XP17"), Log.Contains(TEXT("Gold=98 XP=17")));

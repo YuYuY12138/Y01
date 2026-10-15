@@ -1,4 +1,4 @@
-﻿param([string]$Label = 'Wave-Green', [string]$Tests = 'Y01')
+param([string]$Label = 'Wave-Green', [string]$Tests = 'Y01', [ValidateRange(1,3600)][int]$TimeoutSeconds = 150)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $exe = 'G:\UE_Engine\g01_engine\Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
@@ -6,7 +6,7 @@ $args = @("`"$root\Y01.uproject`"", '-unattended', '-nop4', '-nullrhi', '-nosoun
 Start-Transcript -Path "$root\Saved\$Label-runner.log" -NoClobber
 $p = Start-Process -FilePath $exe -ArgumentList $args -PassThru
 try {
-    Wait-Process -Id $p.Id -Timeout 150 -ErrorAction Stop
+    Wait-Process -Id $p.Id -Timeout $TimeoutSeconds -ErrorAction Stop
     Write-Output "Automation PID=$($p.Id) Exit=$($p.ExitCode) Report=$root\Saved\$Label"
     if ($p.ExitCode -ne 0) { exit $p.ExitCode }
     $report = Get-Content "$root\Saved\$Label\index.json" -Raw -Encoding UTF8 | ConvertFrom-Json
