@@ -148,6 +148,13 @@ bool FY01R36AutoGuard::RunTest(const FString& Case)
     FY01SkillRow Skill; Skill.Ability = UY01BasicAttackAbility::StaticClass(); Skill.EffectIds = Equipment.EffectIds; Data.Add(K::Skill, Skill);
     FY01ItemGrant A, B, Book; A.ItemId = FGuid::NewGuid(); A.Definition = FY01MatchFixture::Ref(K::Equipment);
     B = A; B.ItemId = FGuid::NewGuid(); Book.ItemId = FGuid::NewGuid(); Book.Definition = FY01MatchFixture::Ref(K::Skill);
+    if (Case == TEXT("EquipStage.Inhibit") || Case == TEXT("EquipStage.Remove"))
+    {
+        // 等值替换不重建派生攻击GE；换入不同幅度才真实经历旧GE停用与移除回调。
+        FY01SourceEffectRow Stronger = Effect; Stronger.Magnitude = 20; Data.Add(K::SourceEffect, Stronger, TEXT("Stronger"));
+        FY01EquipmentRow Replacement; Replacement.EffectIds = {FY01MatchFixture::Ref(K::SourceEffect, TEXT("Stronger"))};
+        Data.Add(K::Equipment, Replacement, TEXT("Stronger")); B.Definition = FY01MatchFixture::Ref(K::Equipment, TEXT("Stronger"));
+    }
     auto View = [&] { FY01LoadoutSnapshot V; L->Observe(V); return V; };
     auto Request = [&](FGuid Id, O Op)
     {

@@ -39,7 +39,7 @@ void FY01R36UIModelTest::GetTests(TArray<FString>& Names, TArray<FString>& Comma
 {
     for (const TCHAR* N : { TEXT("CommittedOnly"), TEXT("Backpack"), TEXT("TenThousand"), TEXT("Equip"), TEXT("Replace"),
         TEXT("Unequip"), TEXT("NoDirectSwap"), TEXT("NoBookEquipment"), TEXT("NoEquipmentSkill"), TEXT("NoLearnedBackpack"),
-        TEXT("EmptyLearn"), TEXT("OccupiedLearn"), TEXT("DuplicateIntent"), TEXT("SameNames"), TEXT("StaleDrag"), TEXT("ForeignDrag"),
+        TEXT("EmptyLearn"), TEXT("OccupiedLearn"), TEXT("DuplicateIntent"), TEXT("SameNames"), TEXT("StaleDrag"), TEXT("GrowthDrag"), TEXT("ForeignDrag"),
         TEXT("SixFourBounds"), TEXT("PhaseAlive"), TEXT("PendingNoOptimism"), TEXT("UnrelatedResponse"), TEXT("FailureReceipt"),
         TEXT("ExactResponse"), TEXT("Confirm"), TEXT("Cancel"), TEXT("StaleTicket"), TEXT("Remove"), TEXT("Cooldown"),
         TEXT("RelearnReady"), TEXT("UnknownCooldown"), TEXT("InvalidDeadline"), TEXT("NoInternalIds"), TEXT("SessionReset"), TEXT("CoalescedSuccess"), TEXT("CoalescedFailure"),
@@ -144,6 +144,14 @@ bool FY01R36UIModelTest::RunTest(const FString& Case)
     }
     if (Case == TEXT("NoLearnedBackpack"))
     { TestFalse(TEXT("已学技能不生成回包拖动"), M.Drag(Z::Skill, V.Skills[0].LearnedId, 0, D)); TestFalse(TEXT("不伪造回包意图"), M.Drop(D, Z::Backpack, -1, Preparing, R)); return true; }
+    if (Case == TEXT("GrowthDrag"))
+    {
+        TestTrue(TEXT("拖起槽内装备"), M.Drag(Z::Equipment, V.Items[1].ItemId, 0, D));
+        V.Items[1].EntityRevision += 2; ++V.ViewRevision; M.Sync(V);
+        TestTrue(TEXT("拖动中槽内成长不作废卸下"), M.Drop(D, Z::Backpack, -1, Preparing, R));
+        TestEqual(TEXT("卸下携带最新版本"), R.ExpectedEntityRevision, V.Items[1].EntityRevision);
+        TestEqual(TEXT("卸下意图"), R.Operation, O::Unequip); return true;
+    }
     const bool Equipped = Case == TEXT("Unequip") || Case == TEXT("NoDirectSwap");
     const bool Book = Case == TEXT("EmptyLearn") || Case == TEXT("OccupiedLearn") || Case == TEXT("NoBookEquipment") || Case == TEXT("DuplicateIntent");
     const int32 ItemIndex = Equipped ? 1 : Book ? 2 : 0;
@@ -177,6 +185,10 @@ bool FY01R36UIModelTest::RunTest(const FString& Case)
         M.Sent(R); FY01ItemRequest Blocked; TestTrue(TEXT("发送后等待服务器"), M.IsPending()); TestFalse(TEXT("在途不复用同号"), M.Drop(D, Z::Equipment, 1, Preparing, Blocked));
         TestEqual(TEXT("发送不移动背包"), M.Backpack().Num(), 3);
         TestTrue(TEXT("发送不填槽"), M.View().EquipmentSlots.IsValidIndex(1) && !M.View().EquipmentSlots[1].IsValid());
+        TestTrue(TEXT("在途装备仅显示预览"), M.IsPreviewing());
+        TestEqual(TEXT("预览槽显示被拖物品"), M.DisplaySlot(1), V.Items[ItemIndex].ItemId);
+        TestFalse(TEXT("预览背包移出被拖物品"), M.DisplayBackpack().Contains(V.Items[ItemIndex].ItemId));
+        TestTrue(TEXT("在途提示说明已预览"), M.Hint().Contains(TEXT("拒绝会自动还原")));
         if (Case == TEXT("SessionReset")) { V.MatchId = FGuid::NewGuid(); V.ViewRevision = 1; M.Sync(V); TestFalse(TEXT("新会话不残留请求"), M.IsPending()); return true; }
         if (Case != TEXT("PendingNoOptimism"))
         {
@@ -185,6 +197,13 @@ bool FY01R36UIModelTest::RunTest(const FString& Case)
             if (Case == TEXT("FailureReceipt")) { V.Response.Code = EY01ItemError::Busy; V.Response.Message = TEXT("HiddenDefinition0"); }
             M.Sync(V); TestEqual(TEXT("仅准确响应解除等待"), M.IsPending(), Case == TEXT("UnrelatedResponse"));
             if (Case == TEXT("FailureReceipt")) { TestTrue(TEXT("权威拒绝可见"), M.Status().Contains(TEXT("忙"))); TestFalse(TEXT("内部诊断不泄漏ID"), M.Status().Contains(TEXT("Hidden"))); }
+            TestEqual(TEXT("回执后预览只随在途存在"), M.IsPreviewing(), Case == TEXT("UnrelatedResponse"));
+            if (Case == TEXT("FailureReceipt"))
+            {
+                TestFalse(TEXT("拒绝后槽位还原为权威空槽"), M.DisplaySlot(1).IsValid());
+                TestTrue(TEXT("拒绝后物品回到背包"), M.DisplayBackpack().Contains(V.Items[ItemIndex].ItemId));
+                TestEqual(TEXT("拒绝后显示与权威一致"), M.DisplayBackpack().Num(), M.Backpack().Num());
+            }
         }
     }
     return true;
@@ -197,7 +216,7 @@ void FY01R36EconomyUIModelTest::GetTests(TArray<FString>& Names, TArray<FString>
     for (const TCHAR* N : {TEXT("Purchase"), TEXT("ArbitraryOffer"), TEXT("Purchased"), TEXT("UnknownOffer"), TEXT("NoFunds"),
         TEXT("Talent"), TEXT("Chosen"), TEXT("UnknownTalent"), TEXT("FiveMaterials"), TEXT("FourMaterials"), TEXT("SixthMaterial"),
         TEXT("MixedQuality"), TEXT("MixedType"), TEXT("EquippedMaterial"), TEXT("StaleMaterial"), TEXT("SessionMaterials"),
-        TEXT("ToggleOff"), TEXT("NoRecipe"), TEXT("Pending"), TEXT("ExactReceipt"), TEXT("Waiting"), TEXT("Ended"), TEXT("Dead")})
+        TEXT("LowestQuality"), TEXT("EquipmentFirst"), TEXT("AcquisitionOrder"), TEXT("NoRecipe"), TEXT("Pending"), TEXT("ExactReceipt"), TEXT("Waiting"), TEXT("Ended"), TEXT("Dead")})
     { Names.Add(N); Commands.Add(N); }
 }
 bool FY01R36EconomyUIModelTest::RunTest(const FString& Case)
@@ -228,7 +247,6 @@ bool FY01R36EconomyUIModelTest::RunTest(const FString& Case)
     {
         TestFalse(TEXT("禁用阶段不买"), M.Purchase(Offer.OfferId, Phase, R));
         TestFalse(TEXT("禁用阶段不选天赋"), M.ChooseTalent(V.TalentChoice.Candidates[0].TalentId, Phase, R));
-        TestFalse(TEXT("禁用阶段不选材料"), M.ToggleMaterial(V.Items[0].ItemId, Phase));
         TestFalse(TEXT("禁用阶段不合成"), M.Synthesize(Phase, R)); return true;
     }
     if (Case == TEXT("Talent") || Case == TEXT("Chosen") || Case == TEXT("UnknownTalent"))
@@ -260,25 +278,46 @@ bool FY01R36EconomyUIModelTest::RunTest(const FString& Case)
         }
         return true;
     }
-    const int32 Count = Case == TEXT("FourMaterials") ? 4 : 5;
-    for (int32 I = 0; I < Count; ++I)
+    const FName EquipmentRecipe = Recipe.RecipeId;
+    if (Case == TEXT("FourMaterials")) { V.Items[4].Display.Quality = V.Items[5].Display.Quality = EY01Quality::Blue; }
+    if (Case == TEXT("AcquisitionOrder")) { for (int32 I = 0; I < 6; ++I) { V.Items[I].AcquisitionOrder = 6 - I; } }
+    if (Case == TEXT("LowestQuality") || Case == TEXT("EquipmentFirst"))
     {
-        const bool Valid = I != 4 || (Case != TEXT("MixedQuality") && Case != TEXT("MixedType") && Case != TEXT("EquippedMaterial"));
-        TestEqual(TEXT("真实材料选择检查包内同类同品质"), M.ToggleMaterial(V.Items[I].ItemId, Phase), Valid);
+        if (Case == TEXT("LowestQuality")) { for (auto& Item : V.Items) { Item.Display.Quality = EY01Quality::Blue; } }
+        auto& Blue = V.SynthesisRecipes.AddDefaulted_GetRef(); Blue.RecipeId = TEXT("HiddenBlueRecipe"); Blue.Recipe.InputQuality = EY01Quality::Blue;
+        auto& Skill = V.SynthesisRecipes.AddDefaulted_GetRef(); Skill.RecipeId = TEXT("HiddenSkillRecipe"); Skill.Recipe.InputType = EY01TableKind::Skill;
+        for (int32 I = 0; I < 5; ++I)
+        {
+            auto& Item = V.Items.AddDefaulted_GetRef(); Item.ItemId = FGuid::NewGuid(); Item.EntityRevision = 1; Item.AcquisitionOrder = -10;
+            Item.Definition.Type = EY01TableKind::Skill; Item.Definition.RowName = TEXT("HiddenSkillBook");
+        }
     }
-    if (Case == TEXT("SixthMaterial")) { TestFalse(TEXT("只能选择五件而非限制背包容量"), M.ToggleMaterial(V.Items[5].ItemId, Phase)); }
-    if (Case == TEXT("ToggleOff")) { TestTrue(TEXT("再点取消选择"), M.ToggleMaterial(V.Items[0].ItemId, Phase)); }
+    if (Case != TEXT("StaleMaterial") && Case != TEXT("SessionMaterials")) { ++V.ViewRevision; M.Sync(V); }
     if (Case == TEXT("StaleMaterial")) { ++V.Items[0].EntityRevision; ++V.ViewRevision; M.Sync(V); }
     if (Case == TEXT("SessionMaterials")) { V.ConnectionId = FGuid::NewGuid(); V.ViewRevision = 1; M.Sync(V); }
-    const bool Valid = Case == TEXT("FiveMaterials") || Case == TEXT("SixthMaterial");
+    const bool Valid = Case != TEXT("FourMaterials") && Case != TEXT("NoRecipe");
     const bool Built = M.Synthesize(Phase, R);
-    TestEqual(TEXT("五件完整有效材料及已公开配方才合成"), Built, Valid);
+    TestEqual(TEXT("背包内存在五件同类同品质及已公开配方才合成"), Built, Valid);
     if (Built)
     {
-        TestEqual(TEXT("免费合成意图"), R.Operation, O::Synthesize); TestEqual(TEXT("五个实例版本"), R.Materials.Num(), 5);
-        TestEqual(TEXT("公开配方"), R.Recipe.RowName, Recipe.RecipeId);
-        if (R.Materials.Num() == 5) { TestEqual(TEXT("材料原版本"), R.Materials[0].ExpectedEntityRevision, V.Items[0].EntityRevision); }
-        M.Sent(R); TestEqual(TEXT("等待期间材料不消失"), M.View().Items.Num(), 6); TestEqual(TEXT("免费不扣余额"), M.View().Gold, 200);
+        TestEqual(TEXT("合成意图"), R.Operation, O::Synthesize); TestEqual(TEXT("每次只合一组五件"), R.Materials.Num(), 5);
+        const FName ExpectedRecipe = Case == TEXT("LowestQuality") ? FName(TEXT("HiddenSkillRecipe")) : EquipmentRecipe;
+        TestEqual(TEXT("最低品质优先且同品质装备优先"), R.Recipe.RowName, ExpectedRecipe);
+        TSet<FGuid> Picked; for (const auto& Material : R.Materials) { Picked.Add(Material.ItemId); }
+        if (Case == TEXT("LowestQuality") || Case == TEXT("EquipmentFirst"))
+        {
+            for (int32 I = 0; I < 5; ++I) { TestEqual(TEXT("所选类型正确"), Picked.Contains(V.Items[6 + I].ItemId), Case == TEXT("LowestQuality")); }
+        }
+        else
+        {
+            const int32 Excluded = Case == TEXT("AcquisitionOrder") ? 0
+                : Case == TEXT("MixedQuality") || Case == TEXT("MixedType") || Case == TEXT("EquippedMaterial") ? 4 : 5;
+            TestFalse(TEXT("跳过不合格或更晚获得的物品"), Picked.Contains(V.Items[Excluded].ItemId));
+            const int32 First = Case == TEXT("AcquisitionOrder") ? 5 : 0;
+            TestEqual(TEXT("按获得顺序取最早五件"), R.Materials[0].ItemId, V.Items[First].ItemId);
+            TestEqual(TEXT("材料当前版本"), R.Materials[0].ExpectedEntityRevision, V.Items[First].EntityRevision);
+        }
+        M.Sent(R); TestEqual(TEXT("等待期间材料不消失"), M.View().Items.Num(), V.Items.Num()); TestEqual(TEXT("合成不扣金币"), M.View().Gold, 200);
     }
     return true;
 }

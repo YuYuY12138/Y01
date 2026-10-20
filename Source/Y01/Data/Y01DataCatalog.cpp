@@ -34,6 +34,7 @@ const UScriptStruct* Schema(EKind Kind)
     case EKind::QualityRollPool: return FY01QualityRollPoolRow::StaticStruct();
     case EKind::AttributeMapping: return FY01AttributeMappingRow::StaticStruct();
     case EKind::DamageEffect: return FY01DamageEffectRow::StaticStruct();
+    case EKind::Consumable: return FY01ConsumableRow::StaticStruct();
     default: return nullptr;
     }
 }
@@ -116,9 +117,11 @@ struct FValidator
             const FString Field = FString::Printf(TEXT("EffectIds[%d]"), Index);
             if (const auto* Effect = Reference<FY01SourceEffectRow>(Ref, EKind::SourceEffect, Field))
             {
-                Check(Source.Type == EKind::Equipment || Effect->Kind == EY01SourceEffectKind::AttackFlat
-                    || Effect->Kind == EY01SourceEffectKind::GoldPerSecond, ECode::Invariant, Field,
-                    TEXT("新属性和映射效果首版仅接通装备，技能天赋及商品不得引用"));
+                Check((Source.Type == EKind::Equipment && Effect->Kind != EY01SourceEffectKind::ShieldOnCast)
+                    || Effect->Kind == EY01SourceEffectKind::AttackFlat
+                    || Effect->Kind == EY01SourceEffectKind::GoldPerSecond
+                    || (Source.Type == EKind::Skill && Effect->Kind == EY01SourceEffectKind::ShieldOnCast), ECode::Invariant, Field,
+                    TEXT("暴击、倍率、吸血与周期护盾首版仅接通装备；施放护盾仅接通技能"));
             }
             if (Ref.Type == EKind::SourceEffect && !Ref.RowName.IsNone())
             {
@@ -285,7 +288,7 @@ FY01DataValidation FY01DataCatalog::Validate() const
     if (!Result.IsValid()) { return Result; }
 
     // 可选表只允许未登记；已登记的空指针或错误结构仍须报错，并继续定位引用来源。
-    for (EKind Kind : { EKind::SourceEffect, EKind::GrowthRule, EKind::QualityRollPool, EKind::AttributeMapping, EKind::DamageEffect })
+    for (EKind Kind : { EKind::SourceEffect, EKind::GrowthRule, EKind::QualityRollPool, EKind::AttributeMapping, EKind::DamageEffect, EKind::Consumable })
     {
         if (const UDataTable* const* Table = Tables.Find(Kind))
         {
@@ -311,7 +314,13 @@ FY01DataValidation FY01DataCatalog::Validate() const
     {
         V.Enum(Row.Kind, TEXT("Kind"));
         V.Number(Row.Magnitude, TEXT("Magnitude"));
-        V.Check(Y01Data::ValidSourceEffect(Row), ECode::Invariant, TEXT("Attribute/Amount"), TEXT("效果字段必须匹配种类，仅支持非负有限直接属性或三维到已接通衍生的系数"));
+        V.Enum(Row.Condition, TEXT("Condition"));
+        V.Number(Row.ConditionThreshold, TEXT("ConditionThreshold"));
+        V.Number(Row.DurationSeconds, TEXT("DurationSeconds"));
+        V.Number(Row.LayerCap, TEXT("LayerCap"));
+        V.Number(Row.IntervalSeconds, TEXT("IntervalSeconds"));
+        V.Check(Y01Data::ValidSourceEffect(Row), ECode::Invariant, TEXT("Attribute/Amount"),
+            TEXT("效果字段须匹配种类且数值有限非负；百分比仅支持三维、除每秒金币外的衍生及金币获得，金币获得不支持固定值或映射；生命条件仅支持固定值或百分比的攻击、护甲、生命恢复、攻速及金币获得，阈值须为0至100，无条件时阈值须为零；护盾数值、持续时间、本层上限与间隔须为正，施放护盾间隔须为零"));
     });
     Visit.operator()<FY01DamageEffectRow>(EKind::DamageEffect, [](const auto& Row, const FValidator& V)
     {
@@ -326,13 +335,18 @@ FY01DataValidation FY01DataCatalog::Validate() const
     {
         V.Check(Row.IsValid(), ECode::Invariant, TEXT("SourceAttribute/TargetAttribute/Coefficient"), TEXT("映射只允许三维到已接通衍生，系数须有限非负"));
     });
+    Visit.operator()<FY01ConsumableRow>(EKind::Consumable, [](const auto& Row, const FValidator& V)
+    {
+        V.Enum(Row.Kind, TEXT("Kind")); V.Quality(Row.Quality);
+        V.Check(Row.IsValid(), ECode::Invariant, TEXT("DisplayName"), TEXT("局内道具须为已接通种类且显示名非空"));
+    });
     Visit.operator()<FY01GrowthRuleRow>(EKind::GrowthRule, [](const auto& Row, const FValidator& V)
     {
         V.Enum(Row.Trigger, TEXT("Trigger")); V.Enum(Row.Target, TEXT("Target")); V.Enum(Row.Attribute, TEXT("Attribute"));
         V.Number(Row.Delta, TEXT("Delta"));
         V.Check((Row.Target == EY01GrowthTarget::EquipmentInstance && Row.Attribute == EY01GrowthAttribute::AttackDamage)
-            || (Row.Target == EY01GrowthTarget::Player && Row.Attribute == EY01GrowthAttribute::Strength),
-            ECode::Invariant, TEXT("Attribute"), TEXT("成长仅允许装备实例攻击力或玩家力量"));
+            || (Row.Target == EY01GrowthTarget::Player && Row.Attribute != EY01GrowthAttribute::AttackDamage),
+            ECode::Invariant, TEXT("Attribute"), TEXT("装备实例成长仅支持攻击；玩家侧成长支持力量/生命上限/敏捷/智慧"));
     });
     Visit.operator()<FY01QualityRollPoolRow>(EKind::QualityRollPool, [](const auto& Row, const FValidator& V)
     {
@@ -447,6 +461,7 @@ FY01DataValidation FY01DataCatalog::Validate() const
                 case EKind::Equipment: V.Reference<FY01EquipmentRow>(Entry.Item, EKind::Equipment, Field); break;
                 case EKind::Skill: V.Reference<FY01SkillRow>(Entry.Item, EKind::Skill, Field); break;
                 case EKind::LocalItemPool: V.Reference<FY01LocalItemPoolRow>(Entry.Item, EKind::LocalItemPool, Field); break;
+                case EKind::Consumable: V.Reference<FY01ConsumableRow>(Entry.Item, EKind::Consumable, Field); break;
                 default: V.Check(false, ECode::TypeMismatch, Field, TEXT("个人局内奖励类型无效")); break;
                 }
             }
@@ -584,6 +599,7 @@ FY01DataValidation FY01DataCatalog::Validate() const
     Visit.operator()<FY01MatchRulesRow>(EKind::MatchRules, [&](const auto& Row, const FValidator& V)
     {
         V.Number(Row.MaxLevel, TEXT("MaxLevel"), true);
+        V.Number(Row.DefaultCritMultiplier, TEXT("DefaultCritMultiplier"), true);
         V.Number(Row.Core.MaxHealth, TEXT("Core.MaxHealth"), true);
         V.Number(Row.Core.HealthRegen, TEXT("Core.HealthRegen"));
         V.Number(Row.Core.HitAlertInterval, TEXT("Core.HitAlertInterval"), true);
@@ -604,6 +620,7 @@ FY01DataValidation FY01DataCatalog::Validate() const
         };
         Color(Row.Presentation.DamageColor, TEXT("Presentation.DamageColor"));
         Color(Row.Presentation.HealingColor, TEXT("Presentation.HealingColor"));
+        Color(Row.Presentation.CriticalColor, TEXT("Presentation.CriticalColor"));
         V.Number(Row.Presentation.RegenMergeSeconds, TEXT("Presentation.RegenMergeSeconds"), true);
         // 最多检查已配置等级数加一，防止异常 MaxLevel 造成无界遍历。
         const int64 Limit = FMath::Min<int64>(Row.MaxLevel, static_cast<int64>(Levels.Num()) + 1);
@@ -671,6 +688,17 @@ FY01DataValidation FY01DataCatalog::Validate() const
             if (const auto* Pool = V.Reference<FY01QualityRollPoolRow>(Row.TierPool, EKind::QualityRollPool, TEXT("TierPool")))
             {
                 V.Check(IsLocalItem(Pool->ItemType), ECode::TypeMismatch, TEXT("TierPool.ItemType"), TEXT("商品品质池须为装备或技能类型"));
+            }
+        }
+        else if (Row.ShopKind == EY01ShopKind::DirectItem)
+        {
+            V.Check(Row.TierPool.Type == EKind::None && Row.TierPool.RowName.IsNone(), ECode::Invariant, TEXT("TierPool"), TEXT("直接道具商品的TierPool须完全为空"));
+            V.Check(Row.EffectIds.IsEmpty(), ECode::Invariant, TEXT("EffectIds"), TEXT("直接道具商品不能配置直接效果ID"));
+            V.Check(Row.GrowthRuleIds.IsEmpty(), ECode::Invariant, TEXT("GrowthRuleIds"), TEXT("直接道具商品不能配置成长规则"));
+            V.Number(Row.Quantity, TEXT("Quantity"), true);
+            if (const auto* Item = V.Reference<FY01ConsumableRow>(Row.Pool, EKind::Consumable, TEXT("Pool")))
+            {
+                V.Check(Item->Quality == Row.Quality, ECode::QualityMismatch, TEXT("Quality"), TEXT("直接道具商品标示品质须与道具品质一致"));
             }
         }
     });

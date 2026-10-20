@@ -20,6 +20,8 @@ namespace Y01Tags
     Y01_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Effect_Healing);
     Y01_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Data_Healing);
     Y01_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Data_EquipmentAttack);
+    Y01_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Data_Crit);
+    Y01_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(Data_LifestealAllowed);
 }
 
 UCLASS()
@@ -32,6 +34,9 @@ public:
     UPROPERTY(ReplicatedUsing=OnRep_AttackDamage) FGameplayAttributeData AttackDamage;
     UPROPERTY(ReplicatedUsing=OnRep_Armor) FGameplayAttributeData Armor;
     UPROPERTY(ReplicatedUsing=OnRep_HealthRegen) FGameplayAttributeData HealthRegen;
+    UPROPERTY(ReplicatedUsing=OnRep_CritChance) FGameplayAttributeData CritChance;
+    UPROPERTY(ReplicatedUsing=OnRep_CritMultiplierBonus) FGameplayAttributeData CritMultiplierBonus;
+    UPROPERTY(ReplicatedUsing=OnRep_Lifesteal) FGameplayAttributeData Lifesteal;
     GAMEPLAYATTRIBUTE_PROPERTY_GETTER(UY01AttributeSet, Armor)
     GAMEPLAYATTRIBUTE_VALUE_GETTER(Armor)
     GAMEPLAYATTRIBUTE_PROPERTY_GETTER(UY01AttributeSet, HealthRegen)
@@ -42,13 +47,18 @@ public:
     GAMEPLAYATTRIBUTE_VALUE_GETTER(MaxHealth)
     GAMEPLAYATTRIBUTE_PROPERTY_GETTER(UY01AttributeSet, AttackDamage)
     GAMEPLAYATTRIBUTE_VALUE_GETTER(AttackDamage)
+    GAMEPLAYATTRIBUTE_PROPERTY_GETTER(UY01AttributeSet, CritChance)
+    GAMEPLAYATTRIBUTE_VALUE_GETTER(CritChance)
+    GAMEPLAYATTRIBUTE_PROPERTY_GETTER(UY01AttributeSet, CritMultiplierBonus)
+    GAMEPLAYATTRIBUTE_VALUE_GETTER(CritMultiplierBonus)
+    GAMEPLAYATTRIBUTE_PROPERTY_GETTER(UY01AttributeSet, Lifesteal)
+    GAMEPLAYATTRIBUTE_VALUE_GETTER(Lifesteal)
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
     virtual void PreAttributeChange(const FGameplayAttribute& Attribute, float& NewValue) override;
     virtual void PreAttributeBaseChange(const FGameplayAttribute& Attribute, float& NewValue) const override;
     virtual bool PreGameplayEffectExecute(FGameplayEffectModCallbackData& Data) override;
     virtual void PostGameplayEffectExecute(const FGameplayEffectModCallbackData& Data) override;
     virtual void PostAttributeChange(const FGameplayAttribute& Attribute, float OldValue, float NewValue) override;
-    virtual void OnAttributeAggregatorCreated(const FGameplayAttribute& Attribute, FAggregator* NewAggregator) const override;
 private:
     struct FHealthExecution
     {
@@ -60,6 +70,10 @@ private:
         bool bDamageTagged = false;
         bool bHealingTagged = false;
         bool bFrozen = false;
+        // 吸血链：普攻执行器写许可，冻结时按实际生命损失计算，提交后回给攻击者。
+        bool bLifestealAllowed = false;
+        TWeakObjectPtr<UY01CombatAbilitySystem> LifestealSource;
+        float LifestealPending = 0;
     };
     TArray<FHealthExecution> HealthExecutions;
     void ClampAttribute(const FGameplayAttribute& Attribute, float& Value) const;
@@ -68,6 +82,9 @@ private:
     UFUNCTION() void OnRep_AttackDamage(const FGameplayAttributeData& OldValue);
     UFUNCTION() void OnRep_Armor(const FGameplayAttributeData& OldValue);
     UFUNCTION() void OnRep_HealthRegen(const FGameplayAttributeData& OldValue);
+    UFUNCTION() void OnRep_CritChance(const FGameplayAttributeData& OldValue);
+    UFUNCTION() void OnRep_CritMultiplierBonus(const FGameplayAttributeData& OldValue);
+    UFUNCTION() void OnRep_Lifesteal(const FGameplayAttributeData& OldValue);
 };
 
 UCLASS()

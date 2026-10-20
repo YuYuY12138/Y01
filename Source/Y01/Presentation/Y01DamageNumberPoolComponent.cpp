@@ -78,7 +78,10 @@ void UY01DamageNumberPoolComponent::Receive(const FY01DamageEvent& Event)
     FY01MatchPresentation Presentation;
     if (const auto* State = GetWorld()->GetGameState<AY01GameState>(); State && State->GetPresentation().Revision > 0)
     { Presentation = State->GetPresentation().Values; }
-    Entry.Widget->SetNumber(Event.DisplayAmount, Event.Type == EY01DamageEventType::Healing ? Presentation.HealingColor : Presentation.DamageColor);
+    // 飘字三色：治疗绿 / 暴击CriticalColor / 普通伤害DamageColor。
+    const FLinearColor Color = Event.Type == EY01DamageEventType::Healing ? Presentation.HealingColor
+        : Event.bCritical ? Presentation.CriticalColor : Presentation.DamageColor;
+    Entry.Widget->SetNumber(Event.DisplayAmount, Color);
     Entry.Actor->SetActorHiddenInGame(false); Entry.Display->SetVisibility(true);
     Update(Entry, 0); SetComponentTickEnabled(true);
     if (TraceNumbers())

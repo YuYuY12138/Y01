@@ -796,8 +796,8 @@ bool FY01DamageNumberPoolTest::RunTest(const FString& Case)
     TestEqual(TEXT("其他本地玩家不串池"), FNumberProbe::Entries(F.World, F.B, true).Num(), 0);
     if (Case.StartsWith(TEXT("Format.")))
     {
-        const FString Expected = Case == TEXT("Format.Decimal") ? TEXT("12.3") : Case == TEXT("Format.Tiny") ? TEXT("<0.1") : Case == TEXT("Format.Rounding") ? TEXT("13") : TEXT("7");
-        TestEqual(TEXT("整数无小数，非整数至多一位，极小正值明确显示"), Text->GetText().ToString(), Expected); return true;
+        const FString Expected = Case == TEXT("Format.Decimal") ? TEXT("12") : Case == TEXT("Format.Tiny") ? TEXT("<1") : Case == TEXT("Format.Rounding") ? TEXT("12") : TEXT("7");
+        TestEqual(TEXT("向零截断去小数不四舍五入，不足1的正值显示<1"), Text->GetText().ToString(), Expected); return true;
     }
     if (Case == TEXT("PresentationConfig") || Case == TEXT("PresentationFallback"))
     {

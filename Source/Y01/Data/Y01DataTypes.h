@@ -21,7 +21,7 @@ enum class EY01TableKind : uint8
     None, Wave, TowerFloor, TrainingStage, Monster, Skill, Talent, Equipment,
     LevelExperience, MetaLootPool, MatchRules, Character, RewardPackage,
     LocalItemPool, ShopOffer, Synthesis, Quality, MetaItem, WarehouseEvent, TalentChoice, SourceEffect,
-    GrowthRule = 21, QualityRollPool = 22, AttributeMapping = 23, DamageEffect = 24
+    GrowthRule = 21, QualityRollPool = 22, AttributeMapping = 23, DamageEffect = 24, Consumable = 25
 };
 
 UENUM(BlueprintType)
@@ -56,9 +56,13 @@ enum class EY01AttackType : uint8 { Melee, Ranged };
 UENUM(BlueprintType)
 enum class EY01SkillType : uint8 { Active, Passive };
 UENUM(BlueprintType)
-enum class EY01SourceEffectKind : uint8 { AttackFlat = 0, GoldPerSecond = 1, AttributeFlat = 2, MappingCoefficientAdd = 3 };
+enum class EY01SourceEffectKind : uint8
+{ AttackFlat = 0, GoldPerSecond = 1, AttributeFlat = 2, MappingCoefficientAdd = 3, AttributePercent = 4,
+  CritChance = 5, CritMultiplierAdd = 6, Lifesteal = 7, ShieldPeriodic = 8, ShieldOnCast = 9 };
 UENUM(BlueprintType)
-enum class EY01Attribute : uint8 { None, Strength, Agility, Wisdom, AttackDamage, MaxHealth, Armor, HealthRegen, GoldPerSecond, AttackRate };
+enum class EY01Attribute : uint8 { None, Strength, Agility, Wisdom, AttackDamage, MaxHealth, Armor, HealthRegen, GoldPerSecond, AttackRate, GoldGain };
+UENUM(BlueprintType)
+enum class EY01EffectCondition : uint8 { None, HealthBelow, HealthAbove };
 
 namespace Y01Data
 {
@@ -73,9 +77,28 @@ namespace Y01Data
         default: return false;
         }
     }
+    inline bool IsConditionalTarget(EY01Attribute A)
+    {
+        return A == EY01Attribute::AttackDamage || A == EY01Attribute::Armor || A == EY01Attribute::HealthRegen
+            || A == EY01Attribute::AttackRate || A == EY01Attribute::GoldGain;
+    }
     template<typename T> bool ValidSourceEffect(const T& E)
     {
-        if (!FMath::IsFinite(E.Magnitude) || E.Magnitude < 0 || !FMath::IsFinite(E.Amount) || E.Amount < 0) { return false; }
+        if (!FMath::IsFinite(E.Magnitude) || E.Magnitude < 0 || !FMath::IsFinite(E.Amount) || E.Amount < 0
+            || !FMath::IsFinite(E.ConditionThreshold) || E.ConditionThreshold < 0 || E.ConditionThreshold > 100
+            || !FMath::IsFinite(E.DurationSeconds) || !FMath::IsFinite(E.LayerCap) || !FMath::IsFinite(E.IntervalSeconds)) { return false; }
+        switch (E.Condition)
+        {
+        case EY01EffectCondition::None:
+            if (E.ConditionThreshold != 0) { return false; }
+            break;
+        case EY01EffectCondition::HealthBelow:
+        case EY01EffectCondition::HealthAbove:
+            if ((E.Kind != EY01SourceEffectKind::AttributeFlat && E.Kind != EY01SourceEffectKind::AttributePercent)
+                || !IsConditionalTarget(E.TargetAttribute)) { return false; }
+            break;
+        default: return false;
+        }
         switch (E.Kind)
         {
         case EY01SourceEffectKind::AttackFlat:
@@ -84,20 +107,37 @@ namespace Y01Data
         case EY01SourceEffectKind::AttributeFlat:
             return E.Magnitude == 0 && E.SourceAttribute == EY01Attribute::None
                 && (IsPrimaryAttribute(E.TargetAttribute) || IsDerivedAttribute(E.TargetAttribute));
+        case EY01SourceEffectKind::AttributePercent:
+            return E.Magnitude == 0 && E.SourceAttribute == EY01Attribute::None
+                && (IsPrimaryAttribute(E.TargetAttribute) || E.TargetAttribute == EY01Attribute::GoldGain
+                    || (IsDerivedAttribute(E.TargetAttribute) && E.TargetAttribute != EY01Attribute::GoldPerSecond));
         case EY01SourceEffectKind::MappingCoefficientAdd:
             return E.Magnitude == 0 && IsPrimaryAttribute(E.SourceAttribute) && IsDerivedAttribute(E.TargetAttribute);
+        case EY01SourceEffectKind::CritChance:
+        case EY01SourceEffectKind::CritMultiplierAdd:
+        case EY01SourceEffectKind::Lifesteal:
+            return E.Magnitude == 0 && E.SourceAttribute == EY01Attribute::None && E.TargetAttribute == EY01Attribute::None
+                && E.DurationSeconds == 0 && E.LayerCap == 0 && E.IntervalSeconds == 0;
+        case EY01SourceEffectKind::ShieldPeriodic:
+            return E.Magnitude == 0 && E.SourceAttribute == EY01Attribute::None && E.TargetAttribute == EY01Attribute::None
+                && E.Amount > 0 && E.DurationSeconds > 0 && E.LayerCap > 0 && E.IntervalSeconds > 0;
+        case EY01SourceEffectKind::ShieldOnCast:
+            return E.Magnitude == 0 && E.SourceAttribute == EY01Attribute::None && E.TargetAttribute == EY01Attribute::None
+                && E.Amount > 0 && E.DurationSeconds > 0 && E.LayerCap > 0 && E.IntervalSeconds == 0;
         default: return false;
         }
     }
 }
 UENUM(BlueprintType)
-enum class EY01ShopKind : uint8 { RandomPool, DirectEffect, RandomTier = 2 };
+enum class EY01ShopKind : uint8 { RandomPool, DirectEffect, RandomTier = 2, DirectItem = 3 };
 UENUM(BlueprintType)
-enum class EY01GrowthTrigger : uint8 { EffectiveKill };
+enum class EY01ConsumableKind : uint8 { DevourPill };
+UENUM(BlueprintType)
+enum class EY01GrowthTrigger : uint8 { EffectiveKill, CombatTime, BasicAttack };
 UENUM(BlueprintType)
 enum class EY01GrowthTarget : uint8 { EquipmentInstance, Player };
 UENUM(BlueprintType)
-enum class EY01GrowthAttribute : uint8 { AttackDamage, Strength };
+enum class EY01GrowthAttribute : uint8 { AttackDamage, Strength, MaxHealth, Agility, Wisdom };
 UENUM(BlueprintType)
 enum class EY01RewardDomain : uint8 { MatchPersonal, MetaPublic };
 // 槽位仅定义身份与数量，不预先决定未批准的装备部位命名。
@@ -121,6 +161,11 @@ struct Y01_API FY01SourceEffectRow : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadOnly) EY01Attribute SourceAttribute = EY01Attribute::None;
     UPROPERTY(EditAnywhere, BlueprintReadOnly) EY01Attribute TargetAttribute = EY01Attribute::None;
     UPROPERTY(EditAnywhere, BlueprintReadOnly) double Amount = 0;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly) EY01EffectCondition Condition = EY01EffectCondition::None;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly) double ConditionThreshold = 0;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly) double DurationSeconds = 0;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly) double LayerCap = 0;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly) double IntervalSeconds = 0;
 };
 
 USTRUCT(BlueprintType)
@@ -184,6 +229,7 @@ struct Y01_API FY01DamageEffectRow : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadOnly) double TickSeconds = 1;
     UPROPERTY(EditAnywhere, BlueprintReadOnly) double Speed = 400;
     UPROPERTY(EditAnywhere, BlueprintReadOnly) int32 MaxStacks = 1;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly) bool bLifesteal = false;
     bool IsValid() const;
 };
 
@@ -345,6 +391,7 @@ struct Y01_API FY01TestSkillConfig
     UPROPERTY(EditAnywhere, BlueprintReadOnly) float Speed = 0;
     UPROPERTY(EditAnywhere, BlueprintReadOnly) float Lifetime = 0;
     UPROPERTY(EditAnywhere, BlueprintReadOnly) float HitFeedbackSeconds = 0;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly) bool bLifesteal = true;
 
     bool IsValid() const
     {
@@ -408,6 +455,22 @@ struct Y01_API FY01EquipmentRow : public FTableRowBase
     }
 };
 
+// 局内可叠加道具；同行定义在背包内合并为一格计数。
+USTRUCT(BlueprintType)
+struct Y01_API FY01ConsumableRow : public FTableRowBase
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadOnly) EY01ConsumableKind Kind = EY01ConsumableKind::DevourPill;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly) EY01Quality Quality = EY01Quality::Red;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly) TSoftObjectPtr<UTexture2D> Icon;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly) FText DisplayName;
+    bool IsValid() const
+    {
+        return Kind == EY01ConsumableKind::DevourPill && static_cast<uint8>(Quality) <= static_cast<uint8>(EY01Quality::Red)
+            && !DisplayName.IsEmpty();
+    }
+};
+
 USTRUCT(BlueprintType)
 struct Y01_API FY01LevelExperienceRow : public FTableRowBase
 {
@@ -448,7 +511,7 @@ struct Y01_API FY01MatchStartup
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly) int32 SchemaVersion = 0;
     UPROPERTY(EditAnywhere, BlueprintReadOnly) FY01DataRef Character;
     UPROPERTY(EditAnywhere, BlueprintReadOnly) bool bTrainingEnabled = false;
-    UPROPERTY(EditAnywhere, BlueprintReadOnly) bool bR34AutoAttackEnabled = false;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly) bool bAutoAttackEnabled = false;
     UPROPERTY(EditAnywhere, BlueprintReadOnly) bool bEconomyEnabled = false;
     UPROPERTY(EditAnywhere, BlueprintReadOnly) bool bCoreDefenseEnabled = false;
     UPROPERTY(EditAnywhere, BlueprintReadOnly) FY01DataRef TalentChoice;
@@ -464,6 +527,7 @@ struct Y01_API FY01MatchPresentation
     UPROPERTY(EditAnywhere, BlueprintReadOnly) FLinearColor DamageColor = FLinearColor::Red;
     UPROPERTY(EditAnywhere, BlueprintReadOnly) FLinearColor HealingColor = FLinearColor::Green;
     UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(ClampMin="0")) double RegenMergeSeconds = 1;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly) FLinearColor CriticalColor = FLinearColor(1.f, .45f, 0.f, 1.f);
 };
 
 USTRUCT(BlueprintType)
@@ -474,6 +538,7 @@ struct Y01_API FY01MatchRulesRow : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadOnly) FY01CoreSettings Core;
     UPROPERTY(EditAnywhere, BlueprintReadOnly) FY01MatchStartup Startup;
     UPROPERTY(EditAnywhere, BlueprintReadOnly) FY01MatchPresentation Presentation;
+    UPROPERTY(EditAnywhere, BlueprintReadOnly) double DefaultCritMultiplier = 2;
 };
 
 // R33程序测试授予，非正式平衡；正式角色默认完全关闭。

@@ -73,6 +73,7 @@ void AY01Monster::OnRep_PresentationState()
         || (AcceptedPresentationState.WorldEpoch.IsValid() && Incoming.WorldEpoch != AcceptedPresentationState.WorldEpoch)) { return; }
     if (Incoming.bRegistered ? !Incoming.IsRegistered() : Incoming.Kind != EY01MonsterPresentationKind::Unknown || Incoming.RegionId != INDEX_NONE || Incoming.RegionSession != 0) { return; }
     PresentationState = Incoming; AcceptedPresentationState = Incoming; HighestPresentationRevision = Incoming.Revision;
+    if (Incoming.bDead) { ApplyCorpseState(); }
     OnHealthBarPresentationChanged.Broadcast(); RefreshMovementPeersFromWorld();
 }
 bool AY01Monster::RegisterHealthBarPresentation(int32 RegionId, int32 RegionSession)
@@ -112,6 +113,12 @@ void AY01Monster::RecordHealthBarHealthChange(bool bActualDamage, bool bDied)
     PresentationState.WorldEpoch = Service->GetWorldEpoch();
     PresentationState.bEverActuallyDamaged |= bActualDamage; PresentationState.bDead |= bDied;
     PublishPresentation();
+}
+void AY01Monster::ApplyCorpseState()
+{
+    // 碰撞开关不复制，两端各自经血量死亡穿越到达；销毁定时器仅服务器设置，销毁经复制同步。
+    SetActorEnableCollision(false);
+    if (HasAuthority()) { SetLifeSpan(3.f); }
 }
 void AY01Monster::EndPlay(EEndPlayReason::Type Reason)
 {

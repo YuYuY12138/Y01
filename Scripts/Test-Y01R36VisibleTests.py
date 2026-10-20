@@ -1656,7 +1656,7 @@ class R36S2InteractionTests(unittest.TestCase):
 
     def test_material_action_uses_enabled_button_without_requiring_drag(self):
         runner = self.runner(); runner.args.scenario = 'natural'
-        ui = dict(canDrag=False, selectingMaterials=True, materials=5, Synthesize=dict(enabled=True, x=1))
+        ui = dict(canDrag=False, Synthesize=dict(enabled=True, x=1))
         before = dict(expectedSeq=9, items=5, bag=5, equipment=[], skills=[])
         after = dict(before, code=0, items=1, bag=1)
         runner.interaction_state = Mock(side_effect=[(ui, before), ({}, before), ({}, after), ({}, before)])
@@ -1724,11 +1724,11 @@ class R36S2InteractionTests(unittest.TestCase):
         runner.craft_actions.assert_called_once(); runner.full_slots_purchase.assert_called_once()
         runner.pointer.assert_not_called(); runner.advance_manual.assert_called_once_with()
 
-    def test_craft_selects_five_real_cells_before_free_request(self):
-        runner = self.runner(); runner.purchase = Mock(); runner.set_material_mode = Mock()
+    def test_craft_clicks_auto_synthesis_once_without_manual_selection(self):
+        runner = self.runner(); runner.purchase = Mock()
         cells = [dict(zone=0, type=7, quality=0, item=str(i), laidOut=True, rect=[10, 10, 20, 20]) for i in range(1, 6)]
         ui = dict(cells=cells, bagGeometry=dict(laidOut=True, rect=[0, 0, 100, 100]))
-        runner.interaction_state = Mock(return_value=(ui, {})); runner.select_material = Mock()
+        runner.interaction_state = Mock(return_value=(ui, {}))
         def action(label, source, **kwargs):
             b = dict(items=5, bag=5, equipment=[], skills=[], attack=45, incomeRate=4, gold=100, strength=0)
             a = dict(b, items=1, bag=1, productQuality=1, productItem='out')
@@ -1736,11 +1736,11 @@ class R36S2InteractionTests(unittest.TestCase):
             return a
         runner.action = Mock(side_effect=action)
         method = getattr(runner, 'craft_actions', None)
-        self.assertTrue(callable(method), '真实五材料点击合成流程缺失')
+        self.assertTrue(callable(method), '真实一键合成流程缺失')
         method()
         self.assertEqual(runner.purchase.call_count, 4)
-        self.assertEqual([c.args[0] for c in runner.select_material.call_args_list], [str(i) for i in range(1, 6)])
-        self.assertEqual(runner.set_material_mode.call_args_list, [unittest.mock.call(True), unittest.mock.call(False)])
+        self.assertEqual(runner.action.call_count, 1)
+        self.assertFalse(hasattr(runner, 'select_material'))
 
 
 class R36S2LifecycleDriverTests(unittest.TestCase):
@@ -1979,14 +1979,14 @@ class R36S3ActionTests(unittest.TestCase):
         with patch.object(r36, 'training_scope', side_effect=[dict(inside=False, time=1), dict(inside=True, time=2)]): method(True)
         runner.pointer.assert_called_once()
 
-    def test_flight_toggle_cannot_send_transaction(self):
+    def test_flights_always_on_without_toggle(self):
         runner = r36.Runner(); method = getattr(runner, 's3_toggle_flights', None); self.assertTrue(callable(method))
         view = dict(expectedSeq=1, response=0, items=0, bag=0)
-        ui = dict(time=1, flightsEnabled=True, ToggleFlights=dict(laidOut=True))
-        runner.interaction_state = Mock(return_value=(ui, view)); runner.pointer = Mock(); runner.records = Mock(return_value={})
-        runner.wait = lambda predicate, *a, **k: predicate(); runner.emit = Mock()
-        with patch.object(r36, 'settled_ui', return_value=(dict(ui, time=2, flightsEnabled=False), dict(view, expectedSeq=2))):
-            with self.assertRaises(AssertionError): method(False)
+        runner.interaction_state = Mock(return_value=(dict(time=1), view)); runner.pointer = Mock(); runner.emit = Mock()
+        method(True); runner.pointer.assert_not_called()
+        with self.assertRaises(AssertionError): method(False)
+        runner.interaction_state = Mock(return_value=(dict(time=1, ToggleFlights=dict(laidOut=True)), view))
+        with self.assertRaises(AssertionError): method(True)
 
     def test_drop_evidence_waits_for_real_transition_not_ui_alone(self):
         function = getattr(r36, 's3_delivery_evidence', None); self.assertTrue(callable(function))

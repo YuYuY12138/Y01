@@ -7,6 +7,7 @@
 class AY01Monster;
 class AY01Core;
 class AY01PlayerState;
+struct FY01KillEvent;
 UENUM()
 enum class EY01MatchPhase : uint8 { Waiting, Preparing, Battle, Ended };
 UENUM()
@@ -106,6 +107,8 @@ public:
     const FString& GetConfigurationError() const { return ConfigurationError; }
     const TArray<TObjectPtr<AY01Monster>>& GetWaveMonsters() const { return WaveMonsters; }
     AY01GameState* GetFlowState() const { return GetGameState<AY01GameState>(); }
+    // 暴击基础倍率来自MatchRules表；未读到行时保持2。
+    double GetDefaultCritMultiplier() const { return DefaultCritMultiplier; }
 protected:
     bool RegisterMatchCore(AY01Core* Core);
     virtual bool LoadMatchConfiguration(FString& OutError);
@@ -130,6 +133,8 @@ private:
     void FailSpawn(const FString& Error);
     void Publish();
     void CancelTimers();
+    // R37第四期：主线怪死亡金币在局玩家均分；非主线怪或无效行静默忽略。
+    void OnMainlineMonsterKill(const FY01KillEvent& Event);
     bool InitializePlayer(AY01PlayerState* Player, FString& OutError);
     UPROPERTY() TArray<FY01WaveRow> Waves;
     UPROPERTY() TArray<FY01RewardPackageRow> Rewards;
@@ -139,6 +144,7 @@ private:
     FY01DataCatalog MatchCatalog;
     TArray<FTimerHandle> SpawnTimers;
     FTimerHandle PreparationTimer;
+    FDelegateHandle KillRewardHandle;
     TSet<int32> RewardedWaveKeys;
     struct FAutomaticWave
     {
@@ -152,4 +158,5 @@ private:
     bool bTransitioning = false;
     FString ConfigurationError;
     int32 LastStartedWave = INDEX_NONE;
+    double DefaultCritMultiplier = 2;
 };

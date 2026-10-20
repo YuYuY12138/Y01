@@ -8,6 +8,7 @@ class AY01PlayerState;
 class AY01PlaygroundController;
 class AY01Monster;
 class UY01CombatAbilitySystem;
+class ACharacter;
 
 USTRUCT()
 struct FY01TrainingView
@@ -67,6 +68,9 @@ public:
     void Update();
     void BindCombat(UY01CombatAbilitySystem* ASC);
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
+    // 真实对局入房先等一个生成间隔；既有非计时自动化夹具保持入房即刷首批，练功计时用例显式关闭。
+    bool bImmediateFirstBatchForTest = GIsAutomationTesting;
+    FVector BaseReturnLocation(const ACharacter* Pawn, const FVector& Fallback) const;
 private:
     bool PairAllowed(const UY01CombatAbilitySystem* Source, const UY01CombatAbilitySystem* Target) const;
     const FY01TrainingStageRow* StageFor(const FY01TrainingSession& Session) const;

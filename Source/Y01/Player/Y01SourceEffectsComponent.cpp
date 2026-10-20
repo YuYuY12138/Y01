@@ -7,6 +7,7 @@
 #include "Player/Y01DamageEffectsComponent.h"
 #include "Misc/ScopeExit.h"
 #include "GameplayEffectAggregator.h"
+#include "UObject/UnrealType.h"
 #include <limits>
 
 namespace
@@ -25,7 +26,10 @@ bool Same(const TArray<FY01SourceEffectSnapshot>& A, const TArray<FY01SourceEffe
     if (A.Num() != B.Num()) { return false; }
     for (int32 I = 0; I < A.Num(); ++I)
     { if (A[I].EffectId != B[I].EffectId || A[I].Kind != B[I].Kind || A[I].Magnitude != B[I].Magnitude
-        || A[I].SourceAttribute != B[I].SourceAttribute || A[I].TargetAttribute != B[I].TargetAttribute || A[I].Amount != B[I].Amount) { return false; } }
+        || A[I].SourceAttribute != B[I].SourceAttribute || A[I].TargetAttribute != B[I].TargetAttribute || A[I].Amount != B[I].Amount
+        || A[I].Condition != B[I].Condition || A[I].ConditionThreshold != B[I].ConditionThreshold
+        || A[I].DurationSeconds != B[I].DurationSeconds || A[I].LayerCap != B[I].LayerCap || A[I].IntervalSeconds != B[I].IntervalSeconds
+        || A[I].bGrowthContribution != B[I].bGrowthContribution) { return false; } }
     return true;
 }
 bool AddFloat(float& Sum, double Value)
@@ -35,11 +39,104 @@ bool AddFloat(float& Sum, double Value)
     if (!FMath::IsFinite(Next) || (Value > 0 && (V == 0 || Next == Sum)) || (Sum > 0 && Next == V)) { return false; }
     Sum = Next; return true;
 }
+bool ReadHealthRatio(const UY01CombatAbilitySystem& System, double& Out)
+{
+    const double Health = System.GetNumericAttribute(UY01AttributeSet::GetHealthAttribute());
+    const double Max = System.GetNumericAttribute(UY01AttributeSet::GetMaxHealthAttribute());
+    if (!FMath::IsFinite(Health) || Health < 0 || !FMath::IsFinite(Max) || Max < 0) { return false; }
+    Out = Max == 0 ? 0 : Health / Max;
+    return FMath::IsFinite(Out) && Out >= 0 && Out <= 1;
+}
+bool ReadCandidateHealthRatio(const UY01CombatAbilitySystem& System, double Max, double& Out)
+{
+    const double Health = System.GetNumericAttribute(UY01AttributeSet::GetHealthAttribute());
+    if (!FMath::IsFinite(Health) || Health < 0 || !FMath::IsFinite(Max) || Max < 0) { return false; }
+    Out = Max == 0 ? 0 : FMath::Min(Health, Max) / Max;
+    return FMath::IsFinite(Out) && Out >= 0 && Out <= 1;
+}
+bool SameConditions(const TArray<FY01SourceEffectSnapshot>& Effects, double A, double B)
+{
+    for (const auto& E : Effects)
+    {
+        if (FY01AttributeResolver::ConditionActive(E.Condition, E.ConditionThreshold, A)
+            != FY01AttributeResolver::ConditionActive(E.Condition, E.ConditionThreshold, B)) { return false; }
+    }
+    return true;
+}
+bool SameBreakdowns(const TArray<FY01AttributeBreakdown>& A, const TArray<FY01AttributeBreakdown>& B)
+{
+    if (A.Num() != B.Num()) { return false; }
+    for (int32 I = 0; I < A.Num(); ++I)
+    { if (!FY01AttributeBreakdown::StaticStruct()->CompareScriptStruct(&A[I], &B[I], 0)) { return false; } }
+    return true;
+}
 }
 UY01SourceEffectsComponent::UY01SourceEffectsComponent()
 {
-    PrimaryComponentTick.bCanEverTick = false;
+    PrimaryComponentTick.bCanEverTick = true;
+    PrimaryComponentTick.bStartWithTickEnabled = false;
+    PrimaryComponentTick.TickGroup = TG_PostUpdateWork;
     bAutoActivate = false;
+}
+void UY01SourceEffectsComponent::ReevaluateConditions()
+{
+    if (!IsInGameThread() || !bInitialized || bEnded) { return; }
+    const auto R = Check(true);
+    if (!R.IsOk() && R.Code != EError::Busy) { return; }
+    bAttributeRefreshDirty = true;
+    SetComponentTickEnabled(true);
+    DrainAttributeRefresh();
+}
+void UY01SourceEffectsComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+    Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+    DrainAttributeRefresh();
+}
+void UY01SourceEffectsComponent::DrainAttributeRefresh()
+{
+    if (!IsInGameThread()) { return; }
+    auto Clear = [&] { bAttributeRefreshDirty = false; SetComponentTickEnabled(false); };
+    if (!bAttributeRefreshDirty || bEnded) { Clear(); return; }
+    if (bDrainingAttributeRefresh || bBusy || bInCall || (Player.IsValid() && Player->GetLoadout()->IsBusy())) { return; }
+    auto R = Check();
+    if (R.Code == EError::Busy) { return; }
+    bRefreshConditionsChanged = false;
+    if (R.Code == EError::Stopped && Income.IsValid() && Income->State.Phase == EY01IncomePhase::Stopped)
+    { Clear(); return; }
+    TGuardValue<bool> Refresh(bDrainingAttributeRefresh, true);
+    auto Unchanged = [&]
+    {
+        double Ratio = 0;
+        if (!ReadHealthRatio(*ASC.Get(), Ratio)
+            || ASC->GetNumericAttributeBase(UY01AttributeSet::GetAttackDamageAttribute()) != CommittedBaseAttack) { return false; }
+        for (const auto& Record : Records)
+        { if (!SameConditions(Record.Effects, Ratio, CommittedHealthRatio)) { return false; } }
+        return true;
+    };
+    if (R.IsOk() && Unchanged()) { Clear(); return; }
+    if (R.IsOk())
+    {
+        FY01PreparedMutation Plan; FY01SourceTransaction Tx;
+        R = PrepareMutation({}, {}, Plan);
+        if (R.IsOk()) { R = StageMutation(Plan, Tx); }
+        if (R.IsOk()) { R = CommitMutation(Tx); }
+    }
+    if (R.IsOk())
+    {
+        // 提交委托可再次改生命；只检查一次，不在当前GAS广播栈内循环提交。
+        if (!bEnded && Unchanged()) { Clear(); }
+    }
+    else if (R.Code == EError::Interrupted && bRefreshConditionsChanged && !bEnded)
+    {
+        // 候选条件再次跨界已精确回滚；保留dirty/tick，下一入口再有限重算。
+        return;
+    }
+    else if (R.Code != EError::Busy)
+    {
+        UE_LOG(LogTemp, Error, TEXT("属性条件刷新停止 Owner=%s Code=%d: %s"),
+            *GetNameSafe(GetOwner()), static_cast<int32>(R.Code), *R.Message);
+        Clear();
+    }
 }
 FY01RuntimeResult UY01SourceEffectsComponent::Interrupt()
 {
@@ -78,9 +175,17 @@ FY01RuntimeResult UY01SourceEffectsComponent::Initialize(const FGuid& Match, int
     if (!A->GetOwnerActor()) { A->InitAbilityActorInfo(P, P); }
     Player = P; ASC = A; Income = I; MatchId = Match; JoinSequence = JoinSeq;
     BaseAttributes = A->UnitStats;
+    BaseAttributes.AttackDamage = A->GetNumericAttributeBase(UY01AttributeSet::GetAttackDamageAttribute());
     BaseAttributes.Health = A->GetNumericAttributeBase(UY01AttributeSet::GetMaxHealthAttribute());
     BaseAttributes.Armor = A->GetNumericAttributeBase(UY01AttributeSet::GetArmorAttribute());
     BaseAttributes.HealthRegen = A->GetNumericAttributeBase(UY01AttributeSet::GetHealthRegenAttribute());
+    double HealthRatio = 0;
+    if (!ReadHealthRatio(*A, HealthRatio)) { return Fail(EError::InvalidNumber, TEXT("实际生命比例无效")); }
+    FY01ResolvedAttributes Attributes;
+    R = FY01AttributeResolver::Resolve(BaseAttributes, PlayerGrowth, {}, Attributes, HealthRatio);
+    if (!R.IsOk()) { return R; }
+    CommittedAttributes = MoveTemp(Attributes); CommittedHealthRatio = HealthRatio;
+    CommittedBaseAttack = BaseAttributes.AttackDamage;
     bInitialized = true; Revision = 1; SetActiveFlag(true);
     return {};
 }
@@ -122,7 +227,7 @@ FY01RuntimeResult UY01SourceEffectsComponent::InitializeProfile(const FY01DataCa
 }
 FY01RuntimeResult UY01SourceEffectsComponent::MakeId(EY01RuntimeSourceKind Kind, const FString& LocalKey, FY01RuntimeSourceId& Out) const
 {
-    static const TCHAR* Kinds[] = { TEXT("Base"), TEXT("Equipment"), TEXT("Skill"), TEXT("Talent"), TEXT("Shop") };
+    static const TCHAR* Kinds[] = { TEXT("Base"), TEXT("Equipment"), TEXT("Skill"), TEXT("Talent"), TEXT("Shop"), TEXT("Devoured") };
     const uint8 Index = static_cast<uint8>(Kind);
     if (Index >= UE_ARRAY_COUNT(Kinds) || LocalKey.IsEmpty() || LocalKey.Len() > 128)
     { return Fail(EError::InvalidIdentity, TEXT("来源种类或LocalKey无效")); }
@@ -131,52 +236,6 @@ FY01RuntimeResult UY01SourceEffectsComponent::MakeId(EY01RuntimeSourceKind Kind,
     Out.Kind = Kind; Out.LocalKey = LocalKey;
     Out.Id = FString::Printf(TEXT("R36/%s/P%d/%s/%s"), *MatchId.ToString(EGuidFormats::DigitsWithHyphens), JoinSequence, Kinds[Index], *LocalKey);
     return {};
-}
-void UY01SourceEffectsComponent::StabilizeAttackAggregator(FAggregator& Aggregator) const
-{
-    if (!bInitialized || !ASC.IsValid() || !Player.IsValid() || !Player->HasAuthority()) { return; }
-    TMap<FActiveGameplayEffectHandle, const FY01SourceEffectSnapshot*> Identity;
-    // 汇总换算GE始终排在普通来源之前，不能在旧AttackFlat应用时误认成当前来源。
-    FY01SourceEffectSnapshot DerivedIdentity;
-    if (DerivedAttackHandle.IsValid()) { Identity.Add(DerivedAttackHandle, &DerivedIdentity); }
-    if (PendingDerivedAttackHandle.IsValid()) { Identity.Add(PendingDerivedAttackHandle, &DerivedIdentity); }
-    auto Collect = [&](const FRecord& Record)
-    {
-        for (int32 I = 0; I < Record.Handles.Num(); ++I)
-        { if (Record.Handles[I].IsValid()) { Identity.Add(Record.Handles[I], &Record.Effects[I]); } }
-    };
-    for (const auto& Record : Records) { Collect(Record); }
-    for (const auto& Record : Pending) { Collect(Record); }
-    if (Pending.IsValidIndex(ApplyingRecordIndex) && Pending[ApplyingRecordIndex].Effects.IsValidIndex(ApplyingEffectIndex))
-    {
-        // 第一次dirty早于Apply返回handle；只识别正在应用、以本组件为来源的GE。
-        Aggregator.ForEachMod([&](const FAggregatorModInfo& Info)
-        {
-            if (Identity.Contains(Info.Mod->ActiveHandle)) { return; }
-            const auto* Active = ASC->GetActiveGameplayEffect(Info.Mod->ActiveHandle);
-            if (Active && Active->Spec.GetContext().GetSourceObject() == this)
-            { Identity.Add(Info.Mod->ActiveHandle, &Pending[ApplyingRecordIndex].Effects[ApplyingEffectIndex]); }
-        });
-    }
-    if (Identity.IsEmpty()) { return; }
-    // 仅重排真实GAS modifier，幅度、handle、标签、通道和base保持原值。
-    // TakeSnapshotOf不改原聚合器的委托、依赖及metadata，也不额外广播dirty。
-    // 改为在非const聚合器公开的数组视图内重排完整值，避免重建丢掉资格、叠层或预测字段。
-    TMap<EGameplayModEvaluationChannel, const TArray<FAggregatorMod>*> Channels;
-    Aggregator.GetAllAggregatorMods(Channels);
-    for (const auto& Channel : Channels)
-    {
-        for (int32 Op = 0; Op < EGameplayModOp::Max; ++Op)
-        {
-            auto& Mods = const_cast<TArray<FAggregatorMod>&>(Channel.Value[Op]);
-            Mods.StableSort([&](const FAggregatorMod& A, const FAggregatorMod& B)
-            {
-                const auto* PA = Identity.Find(A.ActiveHandle); const auto* PB = Identity.Find(B.ActiveHandle);
-                if (!PA || !PB) { return !PA && PB; }
-                return Before(**PA, **PB);
-            });
-        }
-    }
 }
 FY01RuntimeResult UY01SourceEffectsComponent::ValidateHandles(bool bStaged) const
 {
@@ -188,21 +247,10 @@ FY01RuntimeResult UY01SourceEffectsComponent::ValidateHandles(bool bStaged) cons
             || GE->Spec.GetStackCount() != 1 || GE->Spec.GetSetByCallerMagnitude(Y01Tags::Data_EquipmentAttack, false, -1) != static_cast<float>(DerivedAttackBonus))
         { return Fail(EError::HandleLost, TEXT("属性换算攻击GE被外部改变")); }
     }
-    for (const auto& Record : Records)
-    {
-        for (int32 Index = 0; Index < Record.Effects.Num(); ++Index)
-        {
-            if (Record.Effects[Index].Kind != EKind::AttackFlat) { continue; }
-            const auto* Effect = Record.Handles.IsValidIndex(Index) ? ASC->GetActiveGameplayEffect(Record.Handles[Index]) : nullptr;
-            if (!Effect || Effect->IsPendingRemove || Effect->bIsInhibited != (bStaged && PendingRemoved.Contains(Record.Source.Id)) || Effect->Spec.GetStackCount() != 1
-                || Effect->Spec.GetSetByCallerMagnitude(Y01Tags::Data_EquipmentAttack, false, -1) != static_cast<float>(Record.Effects[Index].Magnitude))
-            { return Fail(EError::HandleLost, TEXT("来源的精确GE句柄或幅度被外部改变")); }
-        }
-    }
     return {};
 }
 FY01RuntimeResult UY01SourceEffectsComponent::ValidateTotals(const TArray<FY01SourceEffectSnapshot>& Extra, const TSet<FString>& Exclude,
-    double& OutRate, double& OutCurrent, FY01ResolvedAttributes* OutAttributes, TOptional<double> CandidateStrength) const
+    double& OutRate, double& OutCurrent, FY01ResolvedAttributes* OutAttributes, TOptional<FY01PlayerGrowthTotals> CandidateStrength, double* OutHealthRatio) const
 {
     TArray<FY01SourceEffectSnapshot> All;
     for (const auto& R : Records) { if (!Exclude.Contains(R.Source.Id)) { All.Append(R.Effects); } }
@@ -211,35 +259,45 @@ FY01RuntimeResult UY01SourceEffectsComponent::ValidateTotals(const TArray<FY01So
     float Attack = ASC->GetNumericAttributeBase(Attribute);
     if (!FMath::IsFinite(Attack) || Attack < 0) { return Fail(EError::InvalidNumber, TEXT("基础攻击无效")); }
     auto Base = BaseAttributes; Base.AttackDamage = Attack;
-    FY01ResolvedAttributes Resolved;
-    auto ResolveResult = FY01AttributeResolver::Resolve(Base, CandidateStrength.Get(PlayerStrength), All, Resolved);
-    if (!ResolveResult.IsOk()) { return ResolveResult; }
-    if (OutAttributes) { *OutAttributes = Resolved; }
-    OutRate = Resolved.GoldPerSecond;
-    if (!AddFloat(Attack, Resolved.AttackBonus)) { return Fail(EError::Precision, TEXT("换算攻击无法表示为有效float")); }
+    double HealthRatio = 0;
+    if (!ReadHealthRatio(*ASC.Get(), HealthRatio)) { return Fail(EError::InvalidNumber, TEXT("实际生命比例无效")); }
+    // 第一遍只解析合法无条件的上限依赖，避免旧比例激活无关效果并提前拒绝精度。
+    TArray<FY01SourceEffectSnapshot> MaxDependencies;
     for (const auto& E : All)
     {
-        if (E.Kind == EKind::AttackFlat)
-        { if (!AddFloat(Attack, E.Magnitude)) { return Fail(EError::Precision, TEXT("攻击汇总溢出或完全吞掉正加值")); } }
-        // 其余种类由纯解析统一求和，不能把非攻击效果当作金币。
+        if (E.Condition == EY01EffectCondition::None && Y01Data::ValidSourceEffect(E)
+            && (((E.Kind == EKind::AttributeFlat || E.Kind == EKind::AttributePercent)
+                    && (Y01Data::IsPrimaryAttribute(E.TargetAttribute) || E.TargetAttribute == EY01Attribute::MaxHealth))
+                || (E.Kind == EKind::MappingCoefficientAdd && E.TargetAttribute == EY01Attribute::MaxHealth)))
+        { MaxDependencies.Add(E); }
     }
+    FY01ResolvedAttributes Resolved;
+    auto ResolveResult = FY01AttributeResolver::Resolve(Base, CandidateStrength.Get(PlayerGrowth), MaxDependencies, Resolved, HealthRatio);
+    if (!ResolveResult.IsOk()) { return ResolveResult; }
+    // 条件不可改变三维或生命上限；第二遍以成功提交后会钳制到的候选上限裁定。
+    if (!ReadCandidateHealthRatio(*ASC.Get(), Resolved.Stats.Health, HealthRatio))
+    { return Fail(EError::InvalidNumber, TEXT("候选生命比例无效")); }
+    ResolveResult = FY01AttributeResolver::Resolve(Base, CandidateStrength.Get(PlayerGrowth), All, Resolved, HealthRatio);
+    if (!ResolveResult.IsOk()) { return ResolveResult; }
+    // R37第四期：金币获取%只放大自然收入速率，不进属性明细。
+    const double Gained = Resolved.GoldPerSecond * (1. + Resolved.GoldGainPercent);
+    if (!FMath::IsFinite(Gained) || Gained < 0 || (Gained > 0 && Resolved.GoldPerSecond == 0))
+    { return Fail(EError::InvalidNumber, TEXT("金币获取%放大后的收入速率无效")); }
+    OutRate = Gained;
+    if (!AddFloat(Attack, Resolved.AttackBonus)) { return Fail(EError::Precision, TEXT("换算攻击无法表示为有效float")); }
     // ASC还可能包含兼容旧GE；新增时也验证其实际current，不能只看自建sum。
     float Current = ASC->GetNumericAttribute(Attribute);
     if (!FMath::IsFinite(Current) || Current < 0) { return Fail(EError::InvalidNumber, TEXT("实际攻击无效")); }
-    if (!Exclude.IsEmpty() || DerivedAttackHandle.IsValid())
+    if (DerivedAttackHandle.IsValid())
     {
         FGameplayEffectAttributeCaptureSpec Capture(FGameplayEffectAttributeCaptureDefinition(Attribute, EGameplayEffectAttributeCaptureSource::Target, false));
         ASC->CaptureAttributeForGameplayEffect(Capture);
         FAggregator Snapshot;
         if (!Capture.AttemptGetAttributeAggregatorSnapshot(Snapshot))
         { return Fail(EError::InvalidNumber, TEXT("不能复制实际攻击聚合器")); }
-        TSet<FActiveGameplayEffectHandle> RemovedHandles;
-        if (DerivedAttackHandle.IsValid()) { RemovedHandles.Add(DerivedAttackHandle); }
-        for (const auto& Record : Records)
-        { if (Exclude.Contains(Record.Source.Id)) { RemovedHandles.Append(Record.Handles); } }
         TArray<bool> Qualifications;
         Snapshot.ForEachMod([&](const FAggregatorModInfo& Info)
-        { Qualifications.Add(Info.Mod->Qualifies() && !RemovedHandles.Contains(Info.Mod->ActiveHandle)); });
+        { Qualifications.Add(Info.Mod->Qualifies() && Info.Mod->ActiveHandle != DerivedAttackHandle); });
         FAggregatorEvaluateMetaData FrozenQualifications([&](const FAggregatorEvaluateParameters&, const FAggregator* Local)
         {
             int32 Index = 0;
@@ -255,13 +313,8 @@ FY01RuntimeResult UY01SourceEffectsComponent::ValidateTotals(const TArray<FY01So
     }
     if (!AddFloat(Current, Resolved.AttackBonus)) { return Fail(EError::Precision, TEXT("实际GAS无法表示换算攻击")); }
     OutCurrent = Current;
-    auto SortedExtra = Extra; SortedExtra.Sort(Before);
-    for (const auto& E : SortedExtra)
-    {
-        if (E.Kind != EKind::AttackFlat) { continue; }
-        if (!AddFloat(Current, E.Magnitude)) { return Fail(EError::Precision, TEXT("实际ASC攻击不能表示新增值")); }
-        OutCurrent += static_cast<float>(E.Magnitude);
-    }
+    if (OutHealthRatio) { *OutHealthRatio = HealthRatio; }
+    if (OutAttributes) { *OutAttributes = MoveTemp(Resolved); }
     return {};
 }
 FY01RuntimeResult UY01SourceEffectsComponent::PrepareSource(const FY01DataCatalog& Catalog, EY01RuntimeSourceKind Kind,
@@ -284,7 +337,8 @@ FY01RuntimeResult UY01SourceEffectsComponent::PrepareSource(const FY01DataCatalo
         { return Fail(EError::InvalidNumber, TEXT("效果种类或有限非负幅度无效")); }
         if (Row->Kind == EKind::AttackFlat && (Row->Magnitude > MAX_flt || (Row->Magnitude > 0 && static_cast<float>(Row->Magnitude) == 0)))
         { return Fail(EError::Precision, TEXT("AttackFlat不能转换为非零有限float")); }
-        Source.Effects.Add({Ref.RowName, Row->Kind, Row->Magnitude, Row->SourceAttribute, Row->TargetAttribute, Row->Amount});
+        Source.Effects.Add({Ref.RowName, Row->Kind, Row->Magnitude, Row->SourceAttribute, Row->TargetAttribute, Row->Amount,
+            Row->Condition, Row->ConditionThreshold, false, Row->DurationSeconds, Row->LayerCap, Row->IntervalSeconds});
     }
     FY01PreparedMutation Mutation;
     R = PrepareMutation({Source}, {}, Mutation);
@@ -295,11 +349,33 @@ bool UY01SourceEffectsComponent::Owns(const FY01SourceTransaction& Transaction) 
 {
     return bBusy && Transaction.Owner.Get() == this && Transaction.Token.IsValid() && Transaction.Token == PendingToken;
 }
-FY01RuntimeResult UY01SourceEffectsComponent::ValidatePending() const
+FY01RuntimeResult UY01SourceEffectsComponent::ValidatePending()
 {
     auto R = Check(true); if (!R.IsOk()) { return R; }
     if (bInterrupted) { return Fail(EError::Interrupted, TEXT("GAS委托重入使暂存事务失效")); }
     R = ValidateHandles(true); if (!R.IsOk()) { return R; }
+    double ActualRatio = 0, CandidateRatio = 0;
+    if (!ReadHealthRatio(*ASC.Get(), ActualRatio)
+        || !ReadCandidateHealthRatio(*ASC.Get(), PendingAttributes.Stats.Health, CandidateRatio))
+    { return Fail(EError::InvalidNumber, TEXT("暂存期间实际或候选生命比例无效")); }
+    // Stage不写Max；实际GAS须仍对应已提交权威上限，不可覆盖外部变动伪装成功。
+    if (ASC->GetNumericAttributeBase(UY01AttributeSet::GetMaxHealthAttribute()) != CommittedAttributes.Stats.Health
+        || ASC->GetNumericAttribute(UY01AttributeSet::GetMaxHealthAttribute()) != CommittedAttributes.Stats.Health)
+    { return Fail(EError::Interrupted, TEXT("实际生命上限与已提交权威属性不一致")); }
+    bool bConditionsMatch = true;
+    for (const auto& Record : Records)
+    {
+        if (!PendingRemoved.Contains(Record.Source.Id))
+        { bConditionsMatch &= SameConditions(Record.Effects, CandidateRatio, PendingHealthRatio); }
+    }
+    for (const auto& Record : Pending)
+    { bConditionsMatch &= SameConditions(Record.Effects, CandidateRatio, PendingHealthRatio); }
+    if (!bConditionsMatch)
+    {
+        if (bDrainingAttributeRefresh) { bRefreshConditionsChanged = true; }
+        bAttributeRefreshDirty = true; SetComponentTickEnabled(true);
+        return Fail(EError::Interrupted, TEXT("暂存期间生命变化使候选条件失效"));
+    }
     const auto Attribute = UY01AttributeSet::GetAttackDamageAttribute();
     if (ASC->GetNumericAttributeBase(Attribute) != BeforeBase) { return Fail(EError::Interrupted, TEXT("暂存期间基础攻击被外部改变")); }
     if (bDerivedAttackChanged && PendingAttributes.AttackBonus > 0)
@@ -309,21 +385,8 @@ FY01RuntimeResult UY01SourceEffectsComponent::ValidatePending() const
             || GE->Spec.GetSetByCallerMagnitude(Y01Tags::Data_EquipmentAttack, false, -1) != static_cast<float>(PendingAttributes.AttackBonus))
         { return Fail(EError::HandleLost, TEXT("暂存换算GE失效")); }
     }
-    int32 Count = 0;
-    for (const auto& Record : Pending)
-    {
-        Count += Record.Effects.Num();
-        for (int32 Index = 0; Index < Record.Effects.Num(); ++Index)
-        {
-            const auto& E = Record.Effects[Index]; if (E.Kind != EKind::AttackFlat) { continue; }
-            const auto* GE = Record.Handles.IsValidIndex(Index) ? ASC->GetActiveGameplayEffect(Record.Handles[Index]) : nullptr;
-            if (!GE || GE->IsPendingRemove || GE->bIsInhibited || GE->Spec.GetStackCount() != 1
-                || GE->Spec.GetSetByCallerMagnitude(Y01Tags::Data_EquipmentAttack, false, -1) != static_cast<float>(E.Magnitude))
-            { return Fail(EError::HandleLost, TEXT("暂存GE句柄失效")); }
-        }
-    }
     const float Actual = ASC->GetNumericAttribute(Attribute);
-    const double Tolerance = FMath::Max(1e-6, FMath::Abs(PendingCurrent) * std::numeric_limits<float>::epsilon() * (Count + Records.Num() + 2));
+    const double Tolerance = FMath::Max(1e-6, FMath::Abs(PendingCurrent) * std::numeric_limits<float>::epsilon() * 2);
     if (!FMath::IsFinite(Actual) || FMath::Abs(static_cast<double>(Actual) - PendingCurrent) > Tolerance)
     { return Fail(EError::Interrupted, TEXT("实际ASC攻击与暂存效果不一致")); }
     return {};
@@ -337,25 +400,20 @@ FY01RuntimeResult UY01SourceEffectsComponent::RequestStop()
 }
 void UY01SourceEffectsComponent::FinishTransaction()
 {
-    Pending.Reset(); PendingRemoved.Reset(); Inhibited.Reset(); PendingToken.Invalidate();
-    PendingDerivedAttackHandle.Invalidate(); bDerivedAttackChanged = false;
+    Pending.Reset(); PendingRemoved.Reset(); PendingToken.Invalidate();
+    PendingDerivedAttackHandle.Invalidate(); bDerivedAttackChanged = false; bDerivedAttackInhibited = false;
+    PendingAttributes = {}; PendingHealthRatio = 1; PendingGrowth = {};
+    PendingRate = 0; PendingTime = 0; PendingCurrent = 0; BeforeBase = 0; BeforeCurrent = 0;
+    bResolvedStateChanged = false;
     if (bStopRequested && Income.IsValid())
     { bStopRequested = false; Income->StopAt(StopTime, true); }
     if (bEnded && !bEndCleanupComplete)
     {
-        // 外层事务退栈前完成挂起的结束清理；先移出记录，避免移除委托重复遍历。
         bEndCleanupComplete = true;
         bBusy = true;
-        const auto EndedRecords = MoveTemp(Records);
+        Records.Reset();
         const auto EndedDerived = DerivedAttackHandle; DerivedAttackHandle.Invalidate();
         if (ASC.IsValid() && ASC->GetActiveGameplayEffect(EndedDerived)) { ASC->RemoveActiveGameplayEffect(EndedDerived); }
-        for (const auto& Record : EndedRecords)
-        {
-            for (auto Handle : Record.Handles)
-            {
-                if (ASC.IsValid() && ASC->GetActiveGameplayEffect(Handle)) { ASC->RemoveActiveGameplayEffect(Handle); }
-            }
-        }
     }
     if (bStopRequested && Income.IsValid())
     { bStopRequested = false; Income->StopAt(StopTime, true); }
@@ -366,21 +424,12 @@ FY01RuntimeResult UY01SourceEffectsComponent::AbortPending()
     bool Restored = true;
     if (ASC.IsValid() && ASC->GetActiveGameplayEffect(PendingDerivedAttackHandle))
     { Restored &= ASC->RemoveActiveGameplayEffect(PendingDerivedAttackHandle); }
-    for (int32 Record = Pending.Num() - 1; Record >= 0; --Record)
+    if (bDerivedAttackInhibited && !bEnded)
     {
-        const auto Handles = Pending[Record].Handles;
-        for (int32 I = Handles.Num() - 1; I >= 0; --I)
-        {
-            if (ASC.IsValid() && ASC->GetActiveGameplayEffect(Handles[I]))
-            { Restored &= ASC->RemoveActiveGameplayEffect(Handles[I]); }
-        }
-    }
-    for (int32 I = Inhibited.Num() - 1; I >= 0 && !bEnded; --I)
-    {
-        auto Handle = Inhibited[I];
+        auto Handle = DerivedAttackHandle;
         const auto* GE = ASC.IsValid() ? ASC->GetActiveGameplayEffect(Handle) : nullptr;
-        if (!GE || GE->IsPendingRemove) { Restored = false; continue; }
-        Restored &= ASC->SetActiveGameplayEffectInhibit(MoveTemp(Handle), false, false).IsValid();
+        if (!GE || GE->IsPendingRemove) { Restored = false; }
+        else { Restored &= ASC->SetActiveGameplayEffectInhibit(MoveTemp(Handle), false, false).IsValid(); }
     }
     if (!bEnded)
     {
@@ -413,21 +462,23 @@ FY01RuntimeResult UY01SourceEffectsComponent::CommitMutationAt(const FY01SourceT
     TGuardValue<bool> Call(bInCall, true);
     auto R = ValidatePending();
     if (!R.IsOk()) { const auto Undo = AbortPending(); return Undo.IsOk() ? R : Undo; }
-    TArray<FRecord> Retired;
     const auto RetiredDerived = bDerivedAttackChanged ? DerivedAttackHandle : FActiveGameplayEffectHandle();
-    if (!Pending.IsEmpty() || !PendingRemoved.IsEmpty() || PendingStrength != PlayerStrength)
+    if (!Pending.IsEmpty() || !PendingRemoved.IsEmpty() || PendingGrowth != PlayerGrowth || bResolvedStateChanged)
     {
         // 线性化点：所有可能失败/广播委托的操作已完成，以下只提交本模块状态。
         // 删除通知在此点之后发生，不能再把已提交事务报告成可回滚失败。
         Income->ChangeRate(PendingRate, PendingTime);
         for (int32 I = Records.Num() - 1; I >= 0; --I)
-        { if (PendingRemoved.Contains(Records[I].Source.Id)) { Retired.Add(MoveTemp(Records[I])); Records.RemoveAt(I); } }
+        { if (PendingRemoved.Contains(Records[I].Source.Id)) { Records.RemoveAt(I); } }
         Records.Append(MoveTemp(Pending)); ++Revision;
     }
     // 受信任外层仅移动已准备内存和结果，不得验证、失败或广播委托。
     // 与来源记录/收入速率处于同一不可观察区间，删除GE重入不能撤销任何一侧。
-    PlayerStrength = PendingStrength;
-    if (bDerivedAttackChanged) { DerivedAttackHandle = PendingDerivedAttackHandle; DerivedAttackBonus = PendingAttributes.AttackBonus; }
+    PlayerGrowth = PendingGrowth;
+    if (bDerivedAttackChanged) { DerivedAttackHandle = PendingDerivedAttackHandle; }
+    DerivedAttackBonus = PendingAttributes.AttackBonus;
+    CommittedAttributes = MoveTemp(PendingAttributes); CommittedHealthRatio = PendingHealthRatio;
+    CommittedBaseAttack = BeforeBase;
     CommitOwner();
     // 所有失败点已过；生命上限、护甲及恢复从未在Stage被改动。
     // 无聚合器时GAS可立即通知；此时双方状态已提交且仍Busy，EndPlay仅挂起清理。
@@ -435,21 +486,19 @@ FY01RuntimeResult UY01SourceEffectsComponent::CommitMutationAt(const FY01SourceT
     auto* CommittedASC = ASC.Get();
     {
         FScopedAggregatorOnDirtyBatch Batch;
-        CommittedASC->UnitStats.Strength = PendingAttributes.Stats.Strength; CommittedASC->UnitStats.Agility = PendingAttributes.Stats.Agility;
-        CommittedASC->UnitStats.Wisdom = PendingAttributes.Stats.Wisdom; CommittedASC->UnitStats.AttackInterval = PendingAttributes.Stats.AttackInterval;
-        CommittedASC->SetNumericAttributeBase(UY01AttributeSet::GetArmorAttribute(), PendingAttributes.Stats.Armor);
-        CommittedASC->SetNumericAttributeBase(UY01AttributeSet::GetHealthRegenAttribute(), PendingAttributes.Stats.HealthRegen);
-        CommittedASC->SetNumericAttributeBase(UY01AttributeSet::GetMaxHealthAttribute(), PendingAttributes.Stats.Health);
+        CommittedASC->UnitStats.Strength = CommittedAttributes.Stats.Strength; CommittedASC->UnitStats.Agility = CommittedAttributes.Stats.Agility;
+        CommittedASC->UnitStats.Wisdom = CommittedAttributes.Stats.Wisdom; CommittedASC->UnitStats.AttackInterval = CommittedAttributes.Stats.AttackInterval;
+        CommittedASC->SetNumericAttributeBase(UY01AttributeSet::GetArmorAttribute(), CommittedAttributes.Stats.Armor);
+        CommittedASC->SetNumericAttributeBase(UY01AttributeSet::GetHealthRegenAttribute(), CommittedAttributes.Stats.HealthRegen);
+        CommittedASC->SetNumericAttributeBase(UY01AttributeSet::GetMaxHealthAttribute(), CommittedAttributes.Stats.Health);
+        // 暴击/倍率/吸血为解析器直写基础值；护盾种类不进属性集，由护盾组件任务消费。
+        CommittedASC->SetNumericAttributeBase(UY01AttributeSet::GetCritChanceAttribute(), CommittedAttributes.CritChance);
+        CommittedASC->SetNumericAttributeBase(UY01AttributeSet::GetCritMultiplierBonusAttribute(), CommittedAttributes.CritMultiplierBonus);
+        CommittedASC->SetNumericAttributeBase(UY01AttributeSet::GetLifestealAttribute(), CommittedAttributes.Lifesteal);
     }
     Player->GetDamageEffects()->SynchronizeCommitted();
-    Pending.Reset(); PendingRemoved.Reset(); Inhibited.Reset();
+    Pending.Reset(); PendingRemoved.Reset();
     if (ASC.IsValid() && ASC->GetActiveGameplayEffect(RetiredDerived)) { ASC->RemoveActiveGameplayEffect(RetiredDerived); }
-    // 使用局部记录而非容器引用；EndPlay重入只挂起收尾，不会删掉此调用栈的记录。
-    for (const auto& Record : Retired)
-    {
-        for (int32 I = Record.Handles.Num() - 1; I >= 0; --I)
-        { if (ASC.IsValid() && ASC->GetActiveGameplayEffect(Record.Handles[I])) { ASC->RemoveActiveGameplayEffect(Record.Handles[I]); } }
-    }
     FinishTransaction(); return {};
 }
 FY01RuntimeResult UY01SourceEffectsComponent::RollbackSource(const FY01SourceTransaction& Transaction) { return RollbackMutation(Transaction); }
@@ -499,6 +548,9 @@ FY01RuntimeResult UY01SourceEffectsComponent::PrepareMutation(const TArray<FY01R
         { return Fail(EError::InvalidIdentity, TEXT("已购买的商店来源本局不可撤销或替换")); }
         if (Id.Kind == EY01RuntimeSourceKind::Talent && Player->GetEconomy()->IsSelectedTalentSource(Id.Id))
         { return Fail(EError::InvalidIdentity, TEXT("已选择的天赋来源本局不可撤销或替换")); }
+        if (Id.Kind == EY01RuntimeSourceKind::Devoured && !Additions.ContainsByPredicate([&](const FY01ResolvedSource& A)
+            { return A.Kind == EY01RuntimeSourceKind::Devoured && A.LocalKey == Id.LocalKey; }))
+        { return Fail(EError::InvalidIdentity, TEXT("已吞噬来源本局不可撤销，只能同批替换成长快照")); }
         Removed.Add(Id.Id);
         if (!Records.ContainsByPredicate([&](const FRecord& V) { return V.Source.Id == Id.Id; }))
         { return Fail(EError::InvalidIdentity, TEXT("批量移除必须引用当前来源")); }
@@ -517,12 +569,18 @@ FY01RuntimeResult UY01SourceEffectsComponent::PrepareMutation(const TArray<FY01R
             if (Seen.Contains(E.EffectId)) { return Fail(EError::DuplicateEffect, TEXT("同一来源重复EffectId")); }
             Seen.Add(E.EffectId);
             if (!Y01Data::ValidSourceEffect(E)
-                || ((E.Kind == EKind::AttributeFlat || E.Kind == EKind::MappingCoefficientAdd)
-                    && Source.Kind != EY01RuntimeSourceKind::Equipment && Source.Kind != EY01RuntimeSourceKind::Base))
+                || ((E.Kind == EKind::AttributeFlat || E.Kind == EKind::MappingCoefficientAdd || E.Kind == EKind::AttributePercent)
+                    && Source.Kind != EY01RuntimeSourceKind::Equipment && Source.Kind != EY01RuntimeSourceKind::Devoured && Source.Kind != EY01RuntimeSourceKind::Base))
             { return Fail(EError::InvalidNumber, TEXT("已解析效果种类或幅度无效")); }
+            // 运行时门与目录层一致：暴击/倍率/吸血/周期护盾仅接通装备（含已吞噬装备）来源，施放护盾仅接通技能来源。
+            if (((E.Kind == EKind::CritChance || E.Kind == EKind::CritMultiplierAdd || E.Kind == EKind::Lifesteal
+                    || E.Kind == EKind::ShieldPeriodic) && Source.Kind != EY01RuntimeSourceKind::Equipment && Source.Kind != EY01RuntimeSourceKind::Devoured)
+                || (E.Kind == EKind::ShieldOnCast && Source.Kind != EY01RuntimeSourceKind::Skill))
+            { return Fail(EError::InvalidNumber, TEXT("暴击、倍率、吸血与周期护盾仅接通装备来源；施放护盾仅接通技能来源")); }
             if (E.Kind == EKind::AttackFlat && (E.Magnitude > MAX_flt || (E.Magnitude > 0 && static_cast<float>(E.Magnitude) == 0)))
             { return Fail(EError::Precision, TEXT("已解析攻击不能表示为非零有限float")); }
-            Item.Effects.Add({Item.Source, E.EffectId, E.Kind, E.Magnitude, E.SourceAttribute, E.TargetAttribute, E.Amount});
+            Item.Effects.Add({Item.Source, E.EffectId, E.Kind, E.Magnitude, E.SourceAttribute, E.TargetAttribute, E.Amount,
+                E.Condition, E.ConditionThreshold, E.bGrowthContribution, E.DurationSeconds, E.LayerCap, E.IntervalSeconds});
         }
         Item.Effects.Sort(Before);
         if (!Removed.Contains(Item.Source.Id))
@@ -568,14 +626,15 @@ FY01RuntimeResult UY01SourceEffectsComponent::StageMutationAt(const FY01Prepared
     TArray<FY01SourceEffectSnapshot> Extra;
     for (const auto& Item : Plan.Additions) { if (!Item.bRepeat) { Extra.Append(Item.Effects); } }
     FY01ResolvedAttributes Attributes;
-    double Rate = 0, Current = 0; R = ValidateTotals(Extra, Removed, Rate, Current, &Attributes, Plan.PlayerStrength); if (!R.IsOk()) { return R; }
+    double Rate = 0, Current = 0, HealthRatio = 0;
+    R = ValidateTotals(Extra, Removed, Rate, Current, &Attributes, Plan.PlayerGrowth, &HealthRatio); if (!R.IsOk()) { return R; }
     ON_SCOPE_EXIT { if (Player.IsValid()) { Player->GetGrowth()->Drain(); } };
     TGuardValue<bool> Call(bInCall, true);
     bBusy = true; bInterrupted = false; PendingRemoved = MoveTemp(Removed);
     for (const auto& Item : Plan.Additions)
     {
         if (Item.bRepeat) { continue; }
-        FRecord Record; Record.Source = Item.Source; Record.Effects = Item.Effects; Record.Handles.SetNum(Item.Effects.Num());
+        FRecord Record; Record.Source = Item.Source; Record.Effects = Item.Effects;
         Pending.Add(MoveTemp(Record));
     }
     Pending.Sort([](const FRecord& A, const FRecord& B)
@@ -584,43 +643,25 @@ FY01RuntimeResult UY01SourceEffectsComponent::StageMutationAt(const FY01Prepared
             : A.Source.LocalKey.Compare(B.Source.LocalKey, ESearchCase::CaseSensitive) < 0;
     });
     PendingToken = FGuid::NewGuid(); PendingRate = Rate; PendingTime = Now; PendingCurrent = Current;
-    PendingAttributes = Attributes; PendingStrength = Plan.PlayerStrength.Get(PlayerStrength);
+    PendingAttributes = MoveTemp(Attributes); PendingGrowth = Plan.PlayerGrowth.Get(PlayerGrowth);
+    PendingHealthRatio = HealthRatio;
     bDerivedAttackChanged = PendingAttributes.AttackBonus != DerivedAttackBonus;
     const auto Attribute = UY01AttributeSet::GetAttackDamageAttribute();
     BeforeBase = ASC->GetNumericAttributeBase(Attribute); BeforeCurrent = ASC->GetNumericAttribute(Attribute);
+    // 暴击/吸血/倍率合计只随Pending/PendingRemoved变化：它们是效果集合的纯合计，与成长/血量无关，
+    // 非空时CommitMutationAt的提交块必然执行，故栅极无需逐字段比较三个新属性。
+    bResolvedStateChanged = BeforeBase != CommittedBaseAttack
+        || PendingAttributes.GoldGainPercent != CommittedAttributes.GoldGainPercent
+        || !SameBreakdowns(PendingAttributes.Breakdowns, CommittedAttributes.Breakdowns);
     // 先可逆停用而非删handle：属性/停用委托重入时可精确恢复原handle。
-    TArray<FActiveGameplayEffectHandle> ToInhibit;
-    if (bDerivedAttackChanged && DerivedAttackHandle.IsValid()) { ToInhibit.Add(DerivedAttackHandle); }
-    for (const auto& Record : Records) { if (PendingRemoved.Contains(Record.Source.Id)) { ToInhibit.Append(Record.Handles); } }
-    for (auto Handle : ToInhibit)
+    if (bDerivedAttackChanged && DerivedAttackHandle.IsValid())
     {
-        if (!Handle.IsValid()) { continue; }
-        Inhibited.Add(Handle);
+        auto Handle = DerivedAttackHandle;
+        bDerivedAttackInhibited = true;
         const auto Returned = ASC->SetActiveGameplayEffectInhibit(MoveTemp(Handle), true, false);
         R = Check(true);
-        if (!R.IsOk() || bInterrupted) { R = Fail(EError::Interrupted, TEXT("来源停用期间重入或会话失效")); break; }
-        if (!Returned.IsValid()) { R = Fail(EError::HandleLost, TEXT("停用期间旧handle丢失")); break; }
-    }
-    for (int32 Record = 0; Record < Pending.Num() && R.IsOk(); ++Record)
-    {
-        TGuardValue<int32> ApplyingRecord(ApplyingRecordIndex, Record);
-        for (int32 Index = 0; Index < Pending[Record].Effects.Num(); ++Index)
-        {
-            const auto E = Pending[Record].Effects[Index]; if (E.Kind != EKind::AttackFlat) { continue; }
-            const float BeforeValue = ASC->GetNumericAttribute(Attribute);
-            auto Context = ASC->MakeEffectContext(); Context.AddSourceObject(this);
-            auto Spec = ASC->MakeOutgoingSpec(UY01EquipmentAttackEffect::StaticClass(), 1, Context);
-            if (!Spec.IsValid()) { R = Fail(EError::EffectRejected, TEXT("无法构造已有Additive GE")); break; }
-            Spec.Data->SetSetByCallerMagnitude(Y01Tags::Data_EquipmentAttack, static_cast<float>(E.Magnitude));
-            TGuardValue<int32> Applying(ApplyingEffectIndex, Index);
-            const auto Handle = ASC->ApplyGameplayEffectSpecToSelf(*Spec.Data);
-            Pending[Record].Handles[Index] = Handle;
-            R = Check(true);
-            if (!R.IsOk() || bInterrupted) { R = Fail(EError::Interrupted, TEXT("应用GE后会话失效或委托重入")); break; }
-            if (!Handle.IsValid() || !ASC->GetActiveGameplayEffect(Handle)) { R = Fail(EError::EffectRejected, TEXT("真实GAS拒绝来源效果")); break; }
-            if (E.Magnitude > 0 && ASC->GetNumericAttribute(Attribute) <= BeforeValue)
-            { R = Fail(EError::Precision, TEXT("真实ASC完全吞掉新增正值")); break; }
-        }
+        if (!R.IsOk() || bInterrupted) { R = Fail(EError::Interrupted, TEXT("来源停用期间重入或会话失效")); }
+        else if (!Returned.IsValid()) { R = Fail(EError::HandleLost, TEXT("停用期间旧handle丢失")); }
     }
     if (R.IsOk() && bDerivedAttackChanged && PendingAttributes.AttackBonus > 0)
     {
@@ -630,8 +671,14 @@ FY01RuntimeResult UY01SourceEffectsComponent::StageMutationAt(const FY01Prepared
         else
         {
             Spec.Data->SetSetByCallerMagnitude(Y01Tags::Data_EquipmentAttack, static_cast<float>(PendingAttributes.AttackBonus));
+            const float BeforeValue = ASC->GetNumericAttribute(Attribute);
             PendingDerivedAttackHandle = ASC->ApplyGameplayEffectSpecToSelf(*Spec.Data);
-            if (!PendingDerivedAttackHandle.IsValid()) { R = Fail(EError::EffectRejected, TEXT("GAS拒绝换算攻击GE")); }
+            R = Check(true);
+            if (!R.IsOk() || bInterrupted) { R = Fail(EError::Interrupted, TEXT("应用GE后会话失效或委托重入")); }
+            else if (!PendingDerivedAttackHandle.IsValid() || !ASC->GetActiveGameplayEffect(PendingDerivedAttackHandle))
+            { R = Fail(EError::EffectRejected, TEXT("GAS拒绝换算攻击GE")); }
+            else if (ASC->GetNumericAttribute(Attribute) <= BeforeValue)
+            { R = Fail(EError::Precision, TEXT("真实ASC完全吞掉新增正值")); }
         }
     }
     if (R.IsOk()) { R = ValidatePending(); }
@@ -671,11 +718,21 @@ FY01RuntimeResult UY01SourceEffectsComponent::Observe(FY01SourceSnapshot& OutSna
     OutSnapshot.CurrentAttack = ASC->GetNumericAttribute(UY01AttributeSet::GetAttackDamageAttribute());
     return {};
 }
+FY01RuntimeResult UY01SourceEffectsComponent::ObserveAttributes(FY01ResolvedAttributes& Out) const
+{
+    Out = {};
+    if (bBusy || bInCall || (Player.IsValid() && Player->GetLoadout()->IsBusy()))
+    { return Fail(EError::Busy, TEXT("最终属性快照在共同事务结束后可读")); }
+    if (!bInitialized || !ASC.IsValid()) { return Fail(EError::Disabled, TEXT("尚无来源会话")); }
+    Out = CommittedAttributes;
+    return {};
+}
 void UY01SourceEffectsComponent::EndSession()
 {
     if (!IsInGameThread() || !GetOwner() || !GetOwner()->HasAuthority() || bEnded) { return; }
     // 必须在回滚、移除GE及其外部委托之前冻结结束时刻。
     bEnded = true;
+    bAttributeRefreshDirty = false; SetComponentTickEnabled(false);
     if (Player.IsValid()) { Player->GetDamageEffects()->ResetCombat(); }
     RequestStop();
     SetActiveFlag(false);

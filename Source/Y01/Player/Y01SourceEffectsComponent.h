@@ -9,7 +9,6 @@
 class AY01PlayerState;
 class UY01CombatAbilitySystem;
 class UY01IncomeComponent;
-struct FAggregator;
 
 UCLASS()
 class Y01_API UY01SourceEffectsComponent : public UActorComponent
@@ -33,8 +32,11 @@ public:
     FY01RuntimeResult CommitMutation(const FY01SourceTransaction& Transaction);
     FY01RuntimeResult RollbackMutation(const FY01SourceTransaction& Transaction);
     FY01RuntimeResult Observe(FY01SourceSnapshot& OutSnapshot) const;
+    FY01RuntimeResult ObserveAttributes(FY01ResolvedAttributes& Out) const;
+    void ReevaluateConditions();
     void EndSession();
     bool IsBusy() const { return bBusy || bInCall; }
+    virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 private:
     friend class UY01IncomeComponent;
@@ -45,16 +47,15 @@ private:
     friend class UY01EconomyComponent;
     friend class UY01GrowthComponent;
     friend class UY01DropDeliveryComponent;
+    friend class UY01ShieldComponent;
     friend class FY01ScopedSourceMutation;
     // 只向受信任库存开放：同一时刻结算、共同无失败提交点，随后才广播旧GE删除。
     FY01RuntimeResult SettleMutationTime(double& OutNow);
     FY01RuntimeResult CommitMutationAt(const FY01SourceTransaction& Transaction, TFunctionRef<void()> CommitOwner);
-    void StabilizeAttackAggregator(FAggregator& Aggregator) const;
     struct FRecord
     {
         FY01RuntimeSourceId Source;
         TArray<FY01SourceEffectSnapshot> Effects;
-        TArray<FActiveGameplayEffectHandle> Handles;
     };
     FY01RuntimeResult Check(bool bAllowBusy = false) const;
     FY01RuntimeResult Interrupt();
@@ -62,13 +63,14 @@ private:
     FY01RuntimeResult MakeId(EY01RuntimeSourceKind Kind, const FString& LocalKey, FY01RuntimeSourceId& Out) const;
     FY01RuntimeResult ValidateTotals(const TArray<FY01SourceEffectSnapshot>& Extra, const TSet<FString>& Exclude,
         double& OutRate, double& OutCurrent, FY01ResolvedAttributes* OutAttributes = nullptr,
-        TOptional<double> CandidateStrength = {}) const;
+        TOptional<FY01PlayerGrowthTotals> CandidateStrength = {}, double* OutHealthRatio = nullptr) const;
     FY01RuntimeResult ValidateHandles(bool bStaged = false) const;
-    FY01RuntimeResult ValidatePending() const;
+    FY01RuntimeResult ValidatePending();
     FY01RuntimeResult StageMutationAt(const FY01PreparedMutation& Plan, FY01SourceTransaction& OutTransaction, double Now);
     FY01RuntimeResult AbortPending();
     bool Owns(const FY01SourceTransaction& Transaction) const;
     void FinishTransaction();
+    void DrainAttributeRefresh();
     TWeakObjectPtr<AY01PlayerState> Player;
     TWeakObjectPtr<UY01CombatAbilitySystem> ASC;
     TWeakObjectPtr<UY01IncomeComponent> Income;
@@ -78,7 +80,6 @@ private:
     TArray<FRecord> Records;
     TArray<FRecord> Pending;
     TSet<FString> PendingRemoved;
-    TArray<FActiveGameplayEffectHandle> Inhibited;
     FGuid PendingToken;
     double PendingRate = 0;
     double PendingTime = 0;
@@ -88,19 +89,26 @@ private:
     double PendingCurrent = 0;
     FY01UnitCombatStats BaseAttributes;
     FY01ResolvedAttributes PendingAttributes;
-    double PlayerStrength = 0;
-    double PendingStrength = 0;
+    FY01ResolvedAttributes CommittedAttributes;
+    double CommittedHealthRatio = 1;
+    double PendingHealthRatio = 1;
+    double CommittedBaseAttack = 0;
+    FY01PlayerGrowthTotals PlayerGrowth;
+    FY01PlayerGrowthTotals PendingGrowth;
     double DerivedAttackBonus = 0;
     FActiveGameplayEffectHandle DerivedAttackHandle;
     FActiveGameplayEffectHandle PendingDerivedAttackHandle;
     bool bDerivedAttackChanged = false;
+    bool bDerivedAttackInhibited = false;
+    bool bResolvedStateChanged = false;
     bool bProfileInitialized = false;
     int32 ProfileInitialGold = 0;
-    int32 ApplyingRecordIndex = INDEX_NONE;
-    int32 ApplyingEffectIndex = INDEX_NONE;
     bool bInitialized = false;
     bool bBusy = false;
     bool bInCall = false;
+    bool bAttributeRefreshDirty = false;
+    bool bDrainingAttributeRefresh = false;
+    bool bRefreshConditionsChanged = false;
     bool bInterrupted = false;
     bool bStopRequested = false;
     bool bStopTimeCaptured = false;

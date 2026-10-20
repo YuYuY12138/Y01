@@ -29,6 +29,7 @@ FY01ItemResult UY01LoadoutComponent::SubmitRequest(AController* Requester, const
         case EY01ItemOperation::Purchase: Result = Execute(Requester, Request, EY01ItemOperation::Purchase); break;
         case EY01ItemOperation::Synthesize: Result = Execute(Requester, Request, EY01ItemOperation::Synthesize); break;
         case EY01ItemOperation::ChooseTalent: Result = Execute(Requester, Request, EY01ItemOperation::ChooseTalent); break;
+        case EY01ItemOperation::Devour: Result = Execute(Requester, Request, EY01ItemOperation::Devour); break;
         case EY01ItemOperation::Unequip: Result = TryUnequip(Requester, Request); break;
         case EY01ItemOperation::PrepareLearn: Result = PrepareLearn(Requester, Request); break;
         case EY01ItemOperation::ConfirmLearn: Result = ConfirmLearn(Requester, Request); break;
@@ -69,12 +70,21 @@ FY01ItemResult UY01LoadoutComponent::PublishCommittedView()
     { return Fail(EY01ItemError::Busy, TEXT("来源或库存尚未共同结束，保留上一完整视图")); }
     auto Result = CheckOwner(); if (!Result.IsOk()) { return Result; }
     auto* Sources = Player->GetSourceEffects();
+    FY01ResolvedAttributes Attributes;
+    // 未初始化来源的旧夹具可保留空明细；真实会话必须读取已提交缓存，不重算或发布部分状态。
+    if (Sources->bInitialized)
+    {
+        Result = FromSource(Sources->ObserveAttributes(Attributes));
+        if (!Result.IsOk()) { ViewDiagnostic = Result.Message; return Result; }
+    }
     Result = FromSource(Sources->ValidateHandles());
     if (!Result.IsOk()) { ViewDiagnostic = Result.Message; return Result; }
     // 权威来源身份必须与当前生效的实例/已学身份一一对应；基础来源不属于库存。
     TMap<FString, TArray<FY01ItemEffect>> EquipmentEffects;
     for (const auto& Slot : EquipmentSlots)
     { if (Slot.IsValid()) { EquipmentEffects.Add(SourceId(Slot).Id, UY01GrowthComponent::EquipmentEffects(Items.FindChecked(Slot))); } }
+    for (const auto& D : Devoured)
+    { EquipmentEffects.Add(SourceId(D.ItemId, EY01RuntimeSourceKind::Devoured).Id, UY01GrowthComponent::EquipmentEffects(D)); }
     TMap<FString, const TArray<FY01ItemEffect>*> Expected;
     for (const auto& Pair : EquipmentEffects) { Expected.Add(Pair.Key, &Pair.Value); }
     for (const auto& S : Skills) { if (S.LearnedId.IsValid()) { Expected.Add(SourceId(S.LearnedId, EY01RuntimeSourceKind::Skill).Id, &S.Effects); } }
@@ -92,6 +102,7 @@ FY01ItemResult UY01LoadoutComponent::PublishCommittedView()
         for (const auto& R : Sources->Records)
         {
             if (R.Source.Kind == EY01RuntimeSourceKind::Equipment || R.Source.Kind == EY01RuntimeSourceKind::Skill
+                || R.Source.Kind == EY01RuntimeSourceKind::Devoured
                 || (R.Source.Kind == EY01RuntimeSourceKind::Shop && Economy->IsPurchasedSource(R.Source.Id))
                 || (R.Source.Kind == EY01RuntimeSourceKind::Talent && Economy->IsSelectedTalentSource(R.Source.Id)))
             {
@@ -104,7 +115,11 @@ FY01ItemResult UY01LoadoutComponent::PublishCommittedView()
                         Matches &= R.Effects.ContainsByPredicate([&](const auto& Actual)
                         { return Actual.Source.Id == R.Source.Id && Actual.Source.Kind == R.Source.Kind && Actual.Source.LocalKey == R.Source.LocalKey
                             && Actual.EffectId == Effect.EffectId && Actual.Kind == Effect.Kind && Actual.Magnitude == Effect.Magnitude
-                            && Actual.SourceAttribute == Effect.SourceAttribute && Actual.TargetAttribute == Effect.TargetAttribute && Actual.Amount == Effect.Amount; });
+                            && Actual.SourceAttribute == Effect.SourceAttribute && Actual.TargetAttribute == Effect.TargetAttribute && Actual.Amount == Effect.Amount
+                            && Actual.Condition == Effect.Condition && Actual.ConditionThreshold == Effect.ConditionThreshold
+                            && Actual.DurationSeconds == Effect.DurationSeconds && Actual.LayerCap == Effect.LayerCap
+                            && Actual.IntervalSeconds == Effect.IntervalSeconds
+                            && Actual.bGrowthContribution == Effect.bGrowthContribution; });
                     }
                 }
                 if (!Matches) { ViewDiagnostic = TEXT("来源与库存身份或效果快照不一致，拒绝发布"); return Fail(EY01ItemError::SourceFailure, *ViewDiagnostic); }
@@ -133,16 +148,19 @@ FY01ItemResult UY01LoadoutComponent::PublishCommittedView()
     Next.Stats = Player->GetCombatASC()->GetUnitStats(); Next.IncomeRate = Player->GetIncome()->Observe().State.Rate;
     Next.Growth = Player->GetGrowth()->GetLedger();
     Next.Delivery = Player->GetDropDelivery()->GetLedger();
+    Next.AttributeBreakdowns = MoveTemp(Attributes.Breakdowns);
     Next.Items.Reserve(Order.Num());
-    for (const auto& Id : Order)
+    const auto ToView = [](const FY01ItemInstance& I, FY01ViewItem& V)
     {
-        const auto& I = Items.FindChecked(Id); auto& V = Next.Items.AddDefaulted_GetRef();
         V.ItemId = I.ItemId; V.ArrivalDeliveryId = I.ArrivalDeliveryId;
         V.Definition = I.Definition; V.EntityRevision = I.EntityRevision; V.LastChangedRevision = I.LastChangedRevision;
-        V.AcquisitionOrder = I.AcquisitionOrder; V.Location = I.Location; V.Slot = I.Slot; V.Effects = I.Effects; V.Growth = I.Growth; V.DamageEffects = I.DamageEffects;
+        V.AcquisitionOrder = I.AcquisitionOrder; V.Location = I.Location; V.Slot = I.Slot; V.Count = I.Count;
+        V.Effects = I.Effects; V.Growth = I.Growth; V.DamageEffects = I.DamageEffects;
         V.Display.Name = I.DisplayName; V.Display.Quality = I.Quality; V.Display.Icon = I.Icon.ToSoftObjectPath();
         V.Display.SkillType = I.Skill.Type; V.Display.CooldownSeconds = I.Skill.CooldownSeconds;
-    }
+    };
+    for (const auto& Id : Order) { ToView(Items.FindChecked(Id), Next.Items.AddDefaulted_GetRef()); }
+    for (const auto& D : Devoured) { ToView(D, Next.Devoured.AddDefaulted_GetRef()); }
     for (const auto& S : Skills)
     {
         auto& V = Next.Skills.AddDefaulted_GetRef(); V.LearnedId = S.LearnedId; V.SkillId = S.SkillId; V.Slot = S.Slot;

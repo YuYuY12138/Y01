@@ -255,7 +255,7 @@ bool FY01BarPoolTest::RunTest(const FString& Case)
     TestEqual(TEXT("首帧直接取ASC比例无插值"), Bar->GetPercent(), .8f); TestTrue(TEXT("胶囊顶加20cm"), FBarProbe::At(First, M));
     TestTrue(TEXT("世界缩放0.5"), First->GetComponentScale().Equals(FVector(.5)));
     if (Case == TEXT("ASC.Health")) { F.Damage(M,10); TestEqual(TEXT("ASC委托立即更新"), Bar->GetPercent(), .7f); }
-    if (Case == TEXT("ASC.MaxHealth")) { M->GetCombatASC()->SetNumericAttributeBase(UY01AttributeSet::GetMaxHealthAttribute(), 200); TestEqual(TEXT("MaxHealth同样订阅"), Bar->GetPercent(), .4f); }
+    if (Case == TEXT("ASC.MaxHealth")) { M->GetCombatASC()->SetNumericAttributeBase(UY01AttributeSet::GetMaxHealthAttribute(), 200); TestEqual(TEXT("MaxHealth同样订阅(升上限同步加血180/200)"), Bar->GetPercent(), .9f); }
     if (Case == TEXT("ASC.FullHeal")) { M->GetCombatASC()->SetNumericAttributeBase(UY01AttributeSet::GetHealthAttribute(),100); F.Step(); TestEqual(TEXT("回血到满仍显示"), F.Active().Num(),1); TestEqual(TEXT("满血立即更新"),Bar->GetPercent(),1.f); }
     if (Case.StartsWith(TEXT("Selection.Closest")) || Case == TEXT("Selection.StableTie") || Case == TEXT("Config.CapMin") || Case == TEXT("Config.CapMax") || Case == TEXT("Config.Snapshot"))
     {

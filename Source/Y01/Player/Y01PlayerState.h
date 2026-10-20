@@ -13,6 +13,7 @@ class UY01GrowthComponent;
 class UY01DropDeliveryComponent;
 class UY01DamageEffectsComponent;
 class UY01ReviveComponent;
+class UY01ShieldComponent;
 
 UCLASS()
 class Y01_API AY01PlayerState : public APlayerState, public IAbilitySystemInterface
@@ -30,6 +31,7 @@ public:
     UY01DropDeliveryComponent* GetDropDelivery() const { return DropDelivery; }
     UY01DamageEffectsComponent* GetDamageEffects() const { return DamageEffects; }
     UY01ReviveComponent* GetRevive() const { return Revive; }
+    UY01ShieldComponent* GetShield() const { return Shield; }
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
     bool TryInitializeCharacter(const FY01DataCatalog& Catalog, const FY01DataRef& Character, FString& OutError);
     bool IsCharacterInitialized() const { return AbilitySystem->IsCombatInitialized(); }
@@ -41,11 +43,16 @@ public:
     UFUNCTION() bool CanAddMatchReward(int32 GoldDelta, int32 ExperienceDelta) const;
     int32 GetGold() const { return Gold; }
     int32 GetExperience() const { return Experience; }
+    // R37第四期一次性金币入口：按 (1+金币获取%) 折算后传入；小数余额满1入账。
+    bool TryAddFractionalGold(double Amount);
+    double GetRewardRemainder() const { return RewardRemainder; }
     const TArray<FY01DataRef>& GetEquipmentSlots() const { return EquipmentSlots; }
     const TArray<FY01DataRef>& GetSkillSlots() const { return SkillSlots; }
 private:
     friend class UY01IncomeComponent;
     bool bEquipmentChanging = false;
+    // R37第四期：小数金币余额，满1经TryAddMatchReward入账；仅服务器权威值，不复制。
+    double RewardRemainder = 0;
     UPROPERTY(VisibleAnywhere) TObjectPtr<UY01CombatAbilitySystem> AbilitySystem;
     UPROPERTY() TObjectPtr<UY01AttributeSet> Attributes;
     UPROPERTY(VisibleAnywhere) TObjectPtr<UY01SourceEffectsComponent> SourceEffects;
@@ -56,6 +63,7 @@ private:
     UPROPERTY(VisibleAnywhere) TObjectPtr<UY01DropDeliveryComponent> DropDelivery;
     UPROPERTY(VisibleAnywhere) TObjectPtr<UY01DamageEffectsComponent> DamageEffects;
     UPROPERTY(VisibleAnywhere) TObjectPtr<UY01ReviveComponent> Revive;
+    UPROPERTY(VisibleAnywhere) TObjectPtr<UY01ShieldComponent> Shield;
     UPROPERTY(Replicated) int32 Gold = 0;
     UPROPERTY(Replicated) int32 Experience = 0;
     UPROPERTY(Replicated) TArray<FY01DataRef> EquipmentSlots;

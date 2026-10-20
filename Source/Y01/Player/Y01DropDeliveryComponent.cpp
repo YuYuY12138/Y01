@@ -98,8 +98,12 @@ FY01ItemResult UY01DropDeliveryComponent::Deliver(const FGuid& DeliveryId, doubl
     R = L->PrepareBatch(Player->GetEconomy()->SnapshotCatalog(), {{Record.ItemId, Record.Definition}}, {}, Batch);
     if (!R.IsOk()) { return R; }
     // 到货身份仅由权威交付写入暂存物品，与库存及Delivered共同提交；不开放给普通入包请求。
-    Batch.Items.FindChecked(Record.ItemId).ArrivalDeliveryId = Record.DeliveryId;
-    Batch.Result.Changes[0].Item.ArrivalDeliveryId = Record.DeliveryId;
+    // 叠加到既有道具格时不改写该格到货身份，回执ItemId保留为已并入的预分配身份。
+    if (!Batch.Merged.Contains(Record.ItemId))
+    {
+        Batch.Items.FindChecked(Record.ItemId).ArrivalDeliveryId = Record.DeliveryId;
+        Batch.Result.Changes[0].Item.ArrivalDeliveryId = Record.DeliveryId;
+    }
     auto Next = Ledger;
     auto* Delivered = Next.Records.FindByPredicate([&](const auto& V) { return V.DeliveryId == DeliveryId; });
     Delivered->State = EY01DeliveryState::Delivered; Delivered->DeliveredTime = Now; Delivered->DelaySeconds = Now - Record.ETA;

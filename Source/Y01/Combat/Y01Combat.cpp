@@ -1,4 +1,5 @@
 #include "Combat/Y01Combat.h"
+#include "Combat/Y01DamagePipeline.h"
 #include "Player/Y01ReviveComponent.h"
 #include "Player/Y01PlayerState.h"
 #include "Match/Y01GameFlow.h"
@@ -14,6 +15,8 @@
 #include "GameplayEffectAggregator.h"
 #include "Player/Y01SourceEffectsComponent.h"
 #include "Player/Y01LoadoutComponent.h"
+#include "Player/Y01GrowthComponent.h"
+#include "Player/Y01ShieldComponent.h"
 #include "Misc/ScopeExit.h"
 
 namespace Y01Tags
@@ -24,6 +27,8 @@ namespace Y01Tags
     UE_DEFINE_GAMEPLAY_TAG(Effect_Healing, "Effect.Y01.Healing");
     UE_DEFINE_GAMEPLAY_TAG(Data_Healing, "Data.Healing");
     UE_DEFINE_GAMEPLAY_TAG(Data_EquipmentAttack, "Data.Equipment.AttackBonus");
+    UE_DEFINE_GAMEPLAY_TAG(Data_Crit, "Data.Crit");
+    UE_DEFINE_GAMEPLAY_TAG(Data_LifestealAllowed, "Data.LifestealAllowed");
 }
 UY01EquipmentAttackEffect::UY01EquipmentAttackEffect()
 {
@@ -43,30 +48,9 @@ void UY01AttributeSet::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out
     DOREPLIFETIME_CONDITION_NOTIFY(UY01AttributeSet, AttackDamage, COND_None, REPNOTIFY_Always);
     DOREPLIFETIME_CONDITION_NOTIFY(UY01AttributeSet, Armor, COND_None, REPNOTIFY_Always);
     DOREPLIFETIME_CONDITION_NOTIFY(UY01AttributeSet, HealthRegen, COND_None, REPNOTIFY_Always);
-}
-void UY01AttributeSet::OnAttributeAggregatorCreated(const FGameplayAttribute& Attribute, FAggregator* NewAggregator) const
-{
-    Super::OnAttributeAggregatorCreated(Attribute, NewAggregator);
-    auto* OwnerASC = GetOwningAbilitySystemComponent();
-    if (Attribute != GetAttackDamageAttribute() || !NewAggregator || !OwnerASC) { return; }
-    // 包装原dirty链，确保GAS自身求值前已稳定排序；不覆盖属性值或基础值。
-    // 未启用R36时来源组件直接返回，原有dirty/recursive及复制路径照常执行。
-    auto Wrap = [OwnerASC](FAggregator::FOnAggregatorDirty& Event)
-    {
-        auto Original = Event;
-        Event.Clear();
-        Event.AddWeakLambda(OwnerASC, [OwnerASC, Original](FAggregator* Aggregator)
-        {
-            if (AActor* Owner = OwnerASC->GetOwner())
-            {
-                if (const auto* Sources = Owner->FindComponentByClass<UY01SourceEffectsComponent>())
-                { Sources->StabilizeAttackAggregator(*Aggregator); }
-            }
-            Original.Broadcast(Aggregator);
-        });
-    };
-    Wrap(NewAggregator->OnDirty);
-    Wrap(NewAggregator->OnDirtyRecursive);
+    DOREPLIFETIME_CONDITION_NOTIFY(UY01AttributeSet, CritChance, COND_None, REPNOTIFY_Always);
+    DOREPLIFETIME_CONDITION_NOTIFY(UY01AttributeSet, CritMultiplierBonus, COND_None, REPNOTIFY_Always);
+    DOREPLIFETIME_CONDITION_NOTIFY(UY01AttributeSet, Lifesteal, COND_None, REPNOTIFY_Always);
 }
 void UY01AttributeSet::ClampAttribute(const FGameplayAttribute& Attribute, float& Value) const
 {
@@ -88,6 +72,9 @@ void UY01AttributeSet::ClampAttribute(const FGameplayAttribute& Attribute, float
     }
     else if (Attribute == GetMaxHealthAttribute() || Attribute == GetAttackDamageAttribute()
         || Attribute == GetArmorAttribute() || Attribute == GetHealthRegenAttribute()) { Value = FMath::Max(0.f, Value); }
+    else if (Attribute == GetCritChanceAttribute()) { Value = FMath::Clamp(Value, 0.f, 1.f); }
+    // 吸血与暴击倍率加成只保非负不封顶：吸血合计/100可超过1（>100%合法），倍率为倍率值直接相加。
+    else if (Attribute == GetLifestealAttribute() || Attribute == GetCritMultiplierBonusAttribute()) { Value = FMath::Max(0.f, Value); }
 }
 void UY01AttributeSet::PreAttributeChange(const FGameplayAttribute& Attribute, float& NewValue) { ClampAttribute(Attribute, NewValue); }
 void UY01AttributeSet::PreAttributeBaseChange(const FGameplayAttribute& Attribute, float& NewValue) const { ClampAttribute(Attribute, NewValue); }
@@ -135,6 +122,10 @@ bool UY01AttributeSet::PreGameplayEffectExecute(FGameplayEffectModCallbackData& 
                 {
                     const float Display = Data.EffectSpec.GetSetByCallerMagnitude(Y01Tags::Data_DamageDisplay, false, -Data.EvaluatedData.Magnitude);
                     if (FMath::IsFinite(Display) && Display > 0) { Execution.Pending.Event.DisplayAmount = Display; }
+                    // Capture之后读取，防止内层借用外层上下文；吸血来源取原始发起ASC。
+                    Execution.bLifestealAllowed = Data.EffectSpec.GetSetByCallerMagnitude(Y01Tags::Data_LifestealAllowed, false, 0.f) > 0.f;
+                    Execution.Pending.Event.bCritical = Data.EffectSpec.GetSetByCallerMagnitude(Y01Tags::Data_Crit, false, 0.f) > 0.f;
+                    Execution.LifestealSource = Cast<UY01CombatAbilitySystem>(Data.EffectSpec.GetContext().GetOriginalInstigatorAbilitySystemComponent());
                 }
             }
         }
@@ -155,6 +146,15 @@ void UY01AttributeSet::PostGameplayEffectExecute(const FGameplayEffectModCallbac
     // 原钳制和死亡/奖励链不变；发布前已出栈，允许消费端再次施加GE。
     if (Completed.KillEventId.IsValid()) { GetWorld()->GetSubsystem<UY01KillRewards>()->Complete(Completed.KillEventId); }
     if (Completed.bFrozen && Completed.Service.IsValid()) { Completed.Service->Commit(Completed.Pending); }
+    // 吸血在提交链内回给攻击者：走治疗GE（绿色飘字既有路径，只触Health不回盾）。
+    if (Completed.LifestealPending > 0 && Completed.LifestealSource.IsValid())
+    { Completed.LifestealSource.Get()->ApplyHealingTo(Completed.LifestealSource.Get(), Completed.LifestealPending); }
+}
+namespace
+{
+// 上限同步写血的嵌套帧内压制条件刷新：外层紧随其后的刷新以最终血量评估一次，
+// 保持来源组件状态机既有"每次Max变动一次刷新"的调用形态。
+bool GY01NestedConditionRefreshSuppressed = false;
 }
 void UY01AttributeSet::PostAttributeChange(const FGameplayAttribute& Attribute, float OldValue, float NewValue)
 {
@@ -172,6 +172,12 @@ void UY01AttributeSet::PostAttributeChange(const FGameplayAttribute& Attribute, 
             { Execution.KillEventId = GetWorld()->GetSubsystem<UY01KillRewards>()->FreezeDeath(Execution.KillAuthorization, OldValue, NewValue); }
             Execution.Pending.Event.ActualDamage = Actual;
             Execution.Pending.Event.DisplayAmount = FMath::Max(Execution.Pending.Event.DisplayAmount, Actual);
+            // 吸血=实际生命损失×吸血%；护盾吸收部分不吸血，冻结到提交链统一回给攻击者。
+            if (Execution.bLifestealAllowed && Execution.LifestealSource.IsValid())
+            {
+                const float Steal = Execution.LifestealSource->GetNumericAttribute(UY01AttributeSet::GetLifestealAttribute());
+                if (FMath::IsFinite(Steal) && Steal > 0) { Execution.LifestealPending = Actual * Steal; }
+            }
             // 只冻结交接身份；仍等PostGameplayEffectExecute提交，不在死亡回调前发事件。
             if (NewValue <= 0 && Execution.Service.IsValid())
             { Execution.Service->StageFinalDamage(Execution.Pending, Cast<UY01CombatAbilitySystem>(GetOwningAbilitySystemComponent())); }
@@ -192,32 +198,59 @@ void UY01AttributeSet::PostAttributeChange(const FGameplayAttribute& Attribute, 
     }
     if (Attribute == GetHealthAttribute() && OldValue > 0 && NewValue <= 0)
     {
-        if (auto* Player = Cast<AY01PlayerState>(GetOwningActor())) { Player->GetRevive()->RecordDeath(); }
+        if (auto* Monster = Cast<AY01Monster>(GetOwningActor())) { Monster->ApplyCorpseState(); }
+        if (auto* Player = Cast<AY01PlayerState>(GetOwningActor()))
+        { Player->GetRevive()->RecordDeath(); Player->GetShield()->ResetLayers(); }
         if (auto* ASC = Cast<UY01CombatAbilitySystem>(GetOwningAbilitySystemComponent())) { ASC->InvalidateCombatSession(); }
     }
-    if (Attribute == GetMaxHealthAttribute() && GetHealth() > NewValue && GetOwningActor()->HasAuthority())
-    { GetOwningAbilitySystemComponent()->SetNumericAttributeBase(GetHealthAttribute(), NewValue); }
+    if (Attribute == GetMaxHealthAttribute() && OldValue != NewValue && GetOwningActor()->HasAuthority())
+    {
+        // 上限升：当前生命同步加差值（所有来源，含装卸装备），死亡态(0血)除外；上限降：钳到新上限。
+        const float CurrentHealth = GetHealth();
+        const float NextHealth = NewValue > OldValue && CurrentHealth > 0
+            ? FMath::Min(CurrentHealth + (NewValue - OldValue), NewValue)
+            : FMath::Min(CurrentHealth, NewValue);
+        if (NextHealth != CurrentHealth)
+        {
+            TGuardValue<bool> Guard(GY01NestedConditionRefreshSuppressed, true);
+            GetOwningAbilitySystemComponent()->SetNumericAttributeBase(GetHealthAttribute(), NextHealth);
+        }
+    }
+    if ((Attribute == GetHealthAttribute() || Attribute == GetMaxHealthAttribute() || Attribute == GetAttackDamageAttribute())
+        && !GY01NestedConditionRefreshSuppressed)
+    {
+        if (auto* Player = Cast<AY01PlayerState>(GetOwningActor()); Player && Player->HasAuthority())
+        { Player->GetSourceEffects()->ReevaluateConditions(); }
+    }
 }
 void UY01AttributeSet::OnRep_Health(const FGameplayAttributeData& OldValue) { GAMEPLAYATTRIBUTE_REPNOTIFY(UY01AttributeSet, Health, OldValue); }
 void UY01AttributeSet::OnRep_MaxHealth(const FGameplayAttributeData& OldValue) { GAMEPLAYATTRIBUTE_REPNOTIFY(UY01AttributeSet, MaxHealth, OldValue); }
 void UY01AttributeSet::OnRep_AttackDamage(const FGameplayAttributeData& OldValue) { GAMEPLAYATTRIBUTE_REPNOTIFY(UY01AttributeSet, AttackDamage, OldValue); }
 void UY01AttributeSet::OnRep_Armor(const FGameplayAttributeData& OldValue) { GAMEPLAYATTRIBUTE_REPNOTIFY(UY01AttributeSet, Armor, OldValue); }
 void UY01AttributeSet::OnRep_HealthRegen(const FGameplayAttributeData& OldValue) { GAMEPLAYATTRIBUTE_REPNOTIFY(UY01AttributeSet, HealthRegen, OldValue); }
+void UY01AttributeSet::OnRep_CritChance(const FGameplayAttributeData& OldValue) { GAMEPLAYATTRIBUTE_REPNOTIFY(UY01AttributeSet, CritChance, OldValue); }
+void UY01AttributeSet::OnRep_CritMultiplierBonus(const FGameplayAttributeData& OldValue) { GAMEPLAYATTRIBUTE_REPNOTIFY(UY01AttributeSet, CritMultiplierBonus, OldValue); }
+void UY01AttributeSet::OnRep_Lifesteal(const FGameplayAttributeData& OldValue) { GAMEPLAYATTRIBUTE_REPNOTIFY(UY01AttributeSet, Lifesteal, OldValue); }
 void UY01DamageExecution::Execute_Implementation(const FGameplayEffectCustomExecutionParameters& Parameters, FGameplayEffectCustomExecutionOutput& Output) const
 {
     const auto* Source = Cast<UY01CombatAbilitySystem>(Parameters.GetSourceAbilitySystemComponent());
-    const auto* Target = Parameters.GetTargetAbilitySystemComponent();
+    const auto* Target = Cast<UY01CombatAbilitySystem>(Parameters.GetTargetAbilitySystemComponent());
     if (!Source || !Target || !Target->GetOwner() || !Target->GetOwner()->HasAuthority()
         || !Source->IsValidCombatTarget(Target->GetAvatarActor())) { return; }
     const float Snapshot = Parameters.GetOwningSpec().GetSetByCallerMagnitude(Y01Tags::Data_Damage, false, -1.f);
     if (!FMath::IsFinite(Snapshot) || Snapshot < 0) { return; }
-    const float Damage = FMath::Max(0.f, Snapshot - Target->GetNumericAttribute(UY01AttributeSet::GetArmorAttribute()));
-    const float Health = Target->GetNumericAttribute(UY01AttributeSet::GetHealthAttribute());
-    if (Damage > 0 && FMath::IsFinite(Health) && Health > 0)
+    // 共享伤害管线：基础 → ×暴击倍率 → 减甲(下限0) → 护盾吸收(仅玩家) → 扣血(不超当前)。
+    const bool bCritical = Parameters.GetOwningSpec().GetSetByCallerMagnitude(Y01Tags::Data_Crit, false, 0.f) > 0.f;
+    const auto Result = Y01DamagePipeline::Resolve(Source, Target, Snapshot, bCritical);
+    if (Result.bValid && Result.HealthLoss > 0)
     {
-        if (auto* Spec = Parameters.GetOwningSpecForPreExecuteMod()) { Spec->SetSetByCallerMagnitude(Y01Tags::Data_DamageDisplay, Damage); }
+        if (auto* Spec = Parameters.GetOwningSpecForPreExecuteMod())
+        {
+            Spec->SetSetByCallerMagnitude(Y01Tags::Data_DamageDisplay, Result.AfterArmor);
+            Spec->SetSetByCallerMagnitude(Y01Tags::Data_LifestealAllowed, 1.f); // 普攻恒可吸血
+        }
         Output.AddOutputModifier(FGameplayModifierEvaluatedData(UY01AttributeSet::GetHealthAttribute(),
-            EGameplayModOp::Additive, -FMath::Min(Damage, Health)));
+            EGameplayModOp::Additive, -Result.HealthLoss));
     }
 }
 UY01DamageEffect::UY01DamageEffect()
@@ -277,7 +310,11 @@ void UY01BasicAttackAbility::ExecuteSkill(FGameplayAbilitySpecHandle Handle, con
     auto Spec = ASC->MakeOutgoingSpec(UY01DamageEffect::StaticClass(), 1, Context);
     // 伤害完全从服务器属性读取，不使用RPC参数或客户端事件载荷。
     Spec.Data->SetSetByCallerMagnitude(Y01Tags::Data_Damage, ASC->GetNumericAttribute(UY01AttributeSet::GetAttackDamageAttribute()));
+    // 暴击在快照时判定（服务器权威）；执行器按该标记套用GameMode倍率与加成。
+    Spec.Data->SetSetByCallerMagnitude(Y01Tags::Data_Crit, Y01DamagePipeline::RollCritical(ASC) ? 1.f : 0.f);
     ASC->ApplyGameplayEffectSpecToTarget(*Spec.Data, Target);
+    // 普攻真正发动即计数；守卫窗口内只计数，由成长Tick统一结算。
+    if (auto* P = Cast<AY01PlayerState>(ASC->GetOwner()); P && P->GetGrowth()) { P->GetGrowth()->NotifyBasicAttack(); }
     EndAbility(Handle, ActorInfo, ActivationInfo, false, false);
 }
 UY01CombatAbilitySystem::UY01CombatAbilitySystem() { SetIsReplicatedByDefault(true); }
@@ -578,7 +615,8 @@ bool UY01CombatAbilitySystem::TryAutoAttack(AActor* Target, TFunctionRef<bool(fl
 {
     if (bAutoAttackStarting || !GetWorld() || !IsAutoAttackInRange(Target)) { return false; }
     auto* Loadout = ActiveLoadout();
-    const auto* Sources = GetOwner()->FindComponentByClass<UY01SourceEffectsComponent>();
+    auto* Sources = GetOwner()->FindComponentByClass<UY01SourceEffectsComponent>();
+    if (Sources) { Sources->DrainAttributeRefresh(); }
     if (Sources && Sources->bInitialized && (Sources->bInCall || !Sources->Check().IsOk())) { return false; }
     // 非GA普攻共用物品事务锁，但不借用GA句柄，避免嵌套GA误认并释放外层锁。
     if (Loadout && !Loadout->BeginAutoAttack()) { return false; }
@@ -772,7 +810,8 @@ const FY01GrantedSource* UY01CombatAbilitySystem::FindGrantedAbility(FGameplayAb
 bool UY01CombatAbilitySystem::IsAbilityReady(FGameplayAbilitySpecHandle Handle) const
 {
     if (!GetOwner() || !GetOwner()->HasAuthority() || !bInitialized || !GetWorld()) { return false; }
-    const auto* Sources = GetOwner()->FindComponentByClass<UY01SourceEffectsComponent>();
+    auto* Sources = GetOwner()->FindComponentByClass<UY01SourceEffectsComponent>();
+    if (Sources) { Sources->DrainAttributeRefresh(); }
     if (Sources && Sources->bInitialized && (Sources->bInCall || !Sources->Check().IsOk())) { return false; }
     if (const auto* L = ActiveLoadout(); L && !L->CanActivate(Handle)) { return false; }
     if (Handle == BasicAttackHandle) { return true; }

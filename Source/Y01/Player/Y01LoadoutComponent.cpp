@@ -11,7 +11,16 @@
 #include "Engine/World.h"
 #include "Misc/ScopeExit.h"
 
-namespace { using E = EY01ItemError; }
+namespace
+{
+using E = EY01ItemError;
+// 槽内成长持续推进实体版本；穿戴后见过的任一版本都指向同一槽内实例，未来版本仍拒绝。
+bool SeenRevision(const FY01ItemInstance& I, uint64 Expected)
+{
+    return I.Location == EY01ItemLocation::EquipmentSlot
+        ? Expected >= FMath::Max<uint64>(I.PlacementRevision, 1) && Expected <= I.EntityRevision : Expected == I.EntityRevision;
+}
+}
 UY01LoadoutComponent::UY01LoadoutComponent()
 {
     PrimaryComponentTick.bCanEverTick = false; bAutoActivate = false;
@@ -135,17 +144,27 @@ FY01ItemResult UY01LoadoutComponent::Resolve(const FY01DataCatalog& Catalog, con
         Out.DisplayName = Row->DisplayName; Out.Quality = Row->Quality; Out.Icon = Row->Icon;
         Effects = Row->EffectIds; Growth = Row->GrowthRuleIds; Damage = Row->DamageEffectIds;
     }
-    else { return Fail(E::InvalidDefinition, TEXT("本局包仅接收装备或技能书")); }
+    else if (Ref.Type == EY01TableKind::Consumable)
+    {
+        const auto* Row = Catalog.FindRow<FY01ConsumableRow>(Ref, Errors);
+        if (!Row || !Row->IsValid()) { return Fail(E::InvalidDefinition, TEXT("局内道具静态定义无效")); }
+        Out.DisplayName = Row->DisplayName; Out.Quality = Row->Quality; Out.Icon = Row->Icon;
+        return Fail(E::None, TEXT(""));
+    }
+    else { return Fail(E::InvalidDefinition, TEXT("本局包仅接收装备、技能书或局内道具")); }
     TSet<FName> Seen;
     for (const auto& Id : Effects)
     {
         const auto* Row = Catalog.FindRow<FY01SourceEffectRow>(Id, Errors);
         if (Id.Type != EY01TableKind::SourceEffect || !Row || Seen.Contains(Id.RowName)
             || !Y01Data::ValidSourceEffect(*Row)
-            || (Ref.Type != EY01TableKind::Equipment && Row->Kind != EY01SourceEffectKind::AttackFlat && Row->Kind != EY01SourceEffectKind::GoldPerSecond))
+            || (Ref.Type != EY01TableKind::Equipment && Row->Kind != EY01SourceEffectKind::AttackFlat && Row->Kind != EY01SourceEffectKind::GoldPerSecond
+                && Row->Kind != EY01SourceEffectKind::ShieldOnCast))
         { return Fail(E::InvalidDefinition, TEXT("效果引用、重复身份或有限非负数值不合法")); }
         Seen.Add(Id.RowName); FY01ItemEffect Efx; Efx.EffectId = Id.RowName; Efx.Kind = Row->Kind; Efx.Magnitude = Row->Magnitude;
         Efx.SourceAttribute = Row->SourceAttribute; Efx.TargetAttribute = Row->TargetAttribute; Efx.Amount = Row->Amount;
+        Efx.Condition = Row->Condition; Efx.ConditionThreshold = Row->ConditionThreshold;
+        Efx.DurationSeconds = Row->DurationSeconds; Efx.LayerCap = Row->LayerCap; Efx.IntervalSeconds = Row->IntervalSeconds;
         Out.Effects.Add(Efx);
     }
     Seen.Reset();
@@ -153,9 +172,11 @@ FY01ItemResult UY01LoadoutComponent::Resolve(const FY01DataCatalog& Catalog, con
     {
         const auto* Row = Catalog.FindRow<FY01GrowthRuleRow>(Id, Errors);
         if (Id.Type != EY01TableKind::GrowthRule || !Row || Seen.Contains(Id.RowName)
-            || Row->Trigger != EY01GrowthTrigger::EffectiveKill || !FMath::IsFinite(Row->Delta) || Row->Delta < 0
+            || !(Row->Trigger == EY01GrowthTrigger::EffectiveKill || Row->Trigger == EY01GrowthTrigger::CombatTime
+                || Row->Trigger == EY01GrowthTrigger::BasicAttack)
+            || !FMath::IsFinite(Row->Delta) || Row->Delta < 0
             || !((Row->Target == EY01GrowthTarget::EquipmentInstance && Ref.Type == EY01TableKind::Equipment && Row->Attribute == EY01GrowthAttribute::AttackDamage)
-                || (Row->Target == EY01GrowthTarget::Player && Row->Attribute == EY01GrowthAttribute::Strength)))
+                || (Row->Target == EY01GrowthTarget::Player && Row->Attribute != EY01GrowthAttribute::AttackDamage)))
         { return Fail(E::InvalidDefinition, TEXT("成长引用、种类、目标或数值不合法")); }
         Seen.Add(Id.RowName); FY01ItemGrowth G;
         G.RuleId = Id.RowName; G.Trigger = Row->Trigger; G.Target = Row->Target; G.Attribute = Row->Attribute; G.Delta = Row->Delta;
@@ -223,20 +244,46 @@ FY01ItemResult UY01LoadoutComponent::PrepareBatch(const FY01DataCatalog& Catalog
     B.Items = Items; B.Order.Reserve(Order.Num() + Grants.Num());
     for (const auto& Id : Order) { if (Removed.Contains(Id)) { B.Items.Remove(Id); } else { B.Order.Add(Id); } }
     B.Items.Reserve(Items.Num() + Grants.Num());
-    TMap<FName, FY01ItemInstance> EquipmentCache, SkillCache;
+    TMap<FName, FY01ItemInstance> EquipmentCache, SkillCache, ConsumableCache;
+    // 可叠加道具：同行定义合并到背包已有一格；同批多次只升一次实体版本。
+    TMap<FName, FGuid> Stacks; TMap<FGuid, int32> ChangeIndex;
+    for (const auto& Id : B.Order)
+    {
+        const auto& Item = B.Items.FindChecked(Id);
+        if (Item.Definition.Type == EY01TableKind::Consumable && Item.Location == EY01ItemLocation::Backpack)
+        { Stacks.Add(Item.Definition.RowName, Id); }
+    }
     for (const auto& Grant : Grants)
     {
         if (!Grant.ItemId.IsValid()) { return Fail(E::InvalidDefinition, TEXT("服务器物品Id必须有效")); }
         if (Items.Contains(Grant.ItemId) || B.Items.Contains(Grant.ItemId)) { return Fail(E::DuplicateItem, TEXT("新增物品身份不得重复或复用材料")); }
-        auto& Cache = Grant.Definition.Type == EY01TableKind::Equipment ? EquipmentCache : SkillCache;
+        auto& Cache = Grant.Definition.Type == EY01TableKind::Equipment ? EquipmentCache
+            : Grant.Definition.Type == EY01TableKind::Consumable ? ConsumableCache : SkillCache;
         auto* Definition = Cache.Find(Grant.Definition.RowName);
         if (!Definition || Definition->Definition.Type != Grant.Definition.Type)
         {
             FY01ItemInstance Value; R = Resolve(Catalog, Grant.Definition, Value); if (!R.IsOk()) { return R; }
             Definition = &Cache.Add(Grant.Definition.RowName, MoveTemp(Value));
         }
+        if (Grant.Definition.Type == EY01TableKind::Consumable)
+        {
+            if (const FGuid* StackId = Stacks.Find(Grant.Definition.RowName))
+            {
+                auto& Stack = B.Items.FindChecked(*StackId);
+                if (Stack.Count == MAX_int32) { return Fail(E::Range, TEXT("道具叠加数量耗尽")); }
+                ++Stack.Count; B.Merged.Add(Grant.ItemId, *StackId);
+                if (const int32* Index = ChangeIndex.Find(*StackId)) { B.Result.Changes[*Index].Item = Stack; continue; }
+                if (Stack.EntityRevision == MAX_uint64) { return Fail(E::Range, TEXT("道具实体版本耗尽")); }
+                ++Stack.EntityRevision; Stack.LastChangedRevision = B.Result.Revision;
+                ChangeIndex.Add(*StackId, B.Result.Changes.Num());
+                auto& Change = B.Result.Changes.AddDefaulted_GetRef(); Change.Kind = EY01ItemChangeKind::Changed; Change.Item = Stack;
+                continue;
+            }
+        }
         auto Item = *Definition; Item.ItemId = Grant.ItemId; Item.AcquisitionOrder = ++B.AcquisitionSerial;
         Item.LastChangedRevision = B.Result.Revision;
+        if (Item.Definition.Type == EY01TableKind::Consumable)
+        { Stacks.Add(Item.Definition.RowName, Item.ItemId); ChangeIndex.Add(Item.ItemId, B.Result.Changes.Num()); }
         auto& Change = B.Result.Changes.AddDefaulted_GetRef(); Change.Kind = EY01ItemChangeKind::Added; Change.Item = Item;
         B.Order.Add(Item.ItemId); B.Items.Add(Item.ItemId, MoveTemp(Item));
     }
@@ -289,7 +336,7 @@ FY01RuntimeSourceId UY01LoadoutComponent::SourceId(const FGuid& Id, EY01RuntimeS
     FY01RuntimeSourceId Source; Source.Kind = Kind;
     Source.LocalKey = Id.ToString(EGuidFormats::DigitsWithHyphens);
     Source.Id = FString::Printf(TEXT("R36/%s/P%d/%s/%s"), *MatchId.ToString(EGuidFormats::DigitsWithHyphens), JoinSequence,
-        Kind == EY01RuntimeSourceKind::Skill ? TEXT("Skill") : TEXT("Equipment"), *Source.LocalKey);
+        Kind == EY01RuntimeSourceKind::Skill ? TEXT("Skill") : Kind == EY01RuntimeSourceKind::Devoured ? TEXT("Devoured") : TEXT("Equipment"), *Source.LocalKey);
     return Source;
 }
 FY01ItemResult UY01LoadoutComponent::CheckEntity(const FY01ItemRequest& R) const
@@ -297,10 +344,10 @@ FY01ItemResult UY01LoadoutComponent::CheckEntity(const FY01ItemRequest& R) const
     if (!EquipmentSlots.IsValidIndex(R.Slot)) { return Fail(E::InvalidSlot, TEXT("装备槽必须在六槽范围内")); }
     const auto* Item = Items.Find(R.ItemId);
     if (!Item) { return Fail(E::MissingItem, TEXT("本玩家注册表不存在此物品")); }
-    if (Item->EntityRevision != R.ExpectedEntityRevision) { return Fail(E::StaleEntity, TEXT("请求实体版本已过期")); }
+    if (!SeenRevision(*Item, R.ExpectedEntityRevision)) { return Fail(E::StaleEntity, TEXT("请求实体版本已过期")); }
     const FGuid Occupant = EquipmentSlots[R.Slot];
     const auto* Old = Items.Find(Occupant);
-    if (R.ExpectedSlotItemId != Occupant || R.ExpectedSlotEntityRevision != (Old ? Old->EntityRevision : 0))
+    if (R.ExpectedSlotItemId != Occupant || (Old ? !SeenRevision(*Old, R.ExpectedSlotEntityRevision) : R.ExpectedSlotEntityRevision != 0))
     { return Fail(E::StaleSlot, TEXT("目标槽占用实例或版本不符合预期")); }
     if (Item->Definition.Type != EY01TableKind::Equipment) { return Fail(E::InvalidDefinition, TEXT("技能书不能装备")); }
     if ((R.Operation == EY01ItemOperation::Equip && Item->Location != EY01ItemLocation::Backpack)
@@ -340,6 +387,7 @@ FY01ItemResult UY01LoadoutComponent::Mutate(AController* C, const FY01ItemReques
     if (Operation == EY01ItemOperation::Purchase) { return Player->GetEconomy()->MutatePurchase(C, Request, Now); }
     if (Operation == EY01ItemOperation::Synthesize) { return Player->GetEconomy()->MutateSynthesis(C, Request, Now); }
     if (Operation == EY01ItemOperation::ChooseTalent) { return Player->GetEconomy()->MutateChooseTalent(C, Request, Now); }
+    if (Operation == EY01ItemOperation::Devour) { return MutateDevour(C, Request, Now); }
     if (Request.Offer.Type != EY01TableKind::None || !Request.Offer.RowName.IsNone() || !Request.Materials.IsEmpty()
         || Request.Recipe.Type != EY01TableKind::None || !Request.Recipe.RowName.IsNone()
         || Request.Talent.Type != EY01TableKind::None || !Request.Talent.RowName.IsNone() || Request.TalentChoiceId.IsValid())
@@ -353,6 +401,7 @@ FY01ItemResult UY01LoadoutComponent::Mutate(AController* C, const FY01ItemReques
     auto Changed = [&](FY01ItemInstance Value, EY01ItemLocation Location, int32 Slot)
     {
         Value.Location = Location; Value.Slot = Slot; ++Value.EntityRevision; Value.LastChangedRevision = Result.Revision;
+        if (Location == EY01ItemLocation::EquipmentSlot) { Value.PlacementRevision = Value.EntityRevision; }
         FY01ItemChange Change; Change.Item = MoveTemp(Value); Result.Changes.Add(MoveTemp(Change));
     };
     if (Operation == EY01ItemOperation::Equip)
@@ -363,7 +412,8 @@ FY01ItemResult UY01LoadoutComponent::Mutate(AController* C, const FY01ItemReques
             Removals.Add(SourceId(Old.ItemId)); Changed(Old, EY01ItemLocation::Backpack, INDEX_NONE);
         }
         FY01ResolvedSource Source; Source.Kind = EY01RuntimeSourceKind::Equipment; Source.LocalKey = SourceId(Item.ItemId).LocalKey;
-        for (const auto& Effect : UY01GrowthComponent::EquipmentEffects(Item)) { Source.Effects.Add({Effect.EffectId, Effect.Kind, Effect.Magnitude, Effect.SourceAttribute, Effect.TargetAttribute, Effect.Amount}); }
+        for (const auto& Effect : UY01GrowthComponent::EquipmentEffects(Item)) { Source.Effects.Add({Effect.EffectId, Effect.Kind, Effect.Magnitude, Effect.SourceAttribute, Effect.TargetAttribute, Effect.Amount,
+            Effect.Condition, Effect.ConditionThreshold, Effect.bGrowthContribution, Effect.DurationSeconds, Effect.LayerCap, Effect.IntervalSeconds}); }
         Additions.Add(MoveTemp(Source)); Changed(Item, EY01ItemLocation::EquipmentSlot, Request.Slot);
     }
     else { Removals.Add(SourceId(Item.ItemId)); Changed(Item, EY01ItemLocation::Backpack, INDEX_NONE); }
@@ -388,6 +438,69 @@ FY01ItemResult UY01LoadoutComponent::Mutate(AController* C, const FY01ItemReques
     // 提交后的GE删除可能重入死亡或EndPlay；已线性化的结果不能被事后权限变化改成失败。
     return R.IsOk() ? Result : R;
 }
+FY01ItemResult UY01LoadoutComponent::MutateDevour(AController* C, const FY01ItemRequest& Request, double Now)
+{
+    if (Request.Offer.Type != EY01TableKind::None || !Request.Offer.RowName.IsNone() || !Request.Materials.IsEmpty()
+        || Request.Recipe.Type != EY01TableKind::None || !Request.Recipe.RowName.IsNone()
+        || Request.Talent.Type != EY01TableKind::None || !Request.Talent.RowName.IsNone() || Request.TalentChoiceId.IsValid())
+    { return Fail(E::InvalidOperation, TEXT("吞噬不接受经济意图")); }
+    // 吞噬丹与目标红装在暂存前后各校验一次；任一不符都不消耗任何物品。
+    auto Check = [&]() -> FY01ItemResult
+    {
+        const auto* Pill = Items.Find(Request.ItemId);
+        if (!Pill) { return Fail(E::MissingItem, TEXT("吞噬丹不在本玩家注册表")); }
+        if (Pill->EntityRevision != Request.ExpectedEntityRevision) { return Fail(E::StaleEntity, TEXT("吞噬丹版本已过期")); }
+        if (Pill->Definition.Type != EY01TableKind::Consumable || Pill->Location != EY01ItemLocation::Backpack || Pill->Count < 1)
+        { return Fail(E::InvalidDefinition, TEXT("只能使用背包中的吞噬丹")); }
+        if (!EquipmentSlots.IsValidIndex(Request.Slot)) { return Fail(E::InvalidSlot, TEXT("只能吞噬装备栏中的装备")); }
+        const auto* Target = Items.Find(EquipmentSlots[Request.Slot]);
+        if (!Target || Request.ExpectedSlotItemId != Target->ItemId || !SeenRevision(*Target, Request.ExpectedSlotEntityRevision))
+        { return Fail(E::StaleSlot, TEXT("目标装备槽占用实例或版本不符合预期")); }
+        if (Target->Definition.Type != EY01TableKind::Equipment || Target->Quality != EY01Quality::Red)
+        { return Fail(E::InvalidDefinition, TEXT("只能吞噬已装备的红色装备")); }
+        if (Devoured.ContainsByPredicate([&](const auto& D) { return D.Definition.RowName == Target->Definition.RowName; }))
+        { return Fail(E::DuplicateItem, TEXT("同一装备本局只能吞噬一次")); }
+        if (Revision == MAX_uint64 || Pill->EntityRevision == MAX_uint64) { return Fail(E::Range, TEXT("库存或实体版本已耗尽")); }
+        return Fail(E::None, TEXT(""));
+    };
+    auto R = Check(); if (!R.IsOk()) { return R; }
+    const uint64 BeforeRevision = Revision;
+    FY01ItemResult Result; Result.Revision = Revision + 1;
+    const auto Target = Items.FindChecked(EquipmentSlots[Request.Slot]);
+    auto Pill = Items.FindChecked(Request.ItemId);
+    auto Snapshot = Target; Snapshot.Location = EY01ItemLocation::Backpack; Snapshot.Slot = INDEX_NONE;
+    ++Snapshot.EntityRevision; Snapshot.LastChangedRevision = Result.Revision;
+    const bool bPillRemoved = Pill.Count <= 1;
+    --Pill.Count; ++Pill.EntityRevision; Pill.LastChangedRevision = Result.Revision;
+    { FY01ItemChange Change; Change.Kind = EY01ItemChangeKind::Removed; Change.Item = Target; Result.Changes.Add(MoveTemp(Change)); }
+    { FY01ItemChange Change; Change.Kind = bPillRemoved ? EY01ItemChangeKind::Removed : EY01ItemChangeKind::Changed; Change.Item = Pill; Result.Changes.Add(MoveTemp(Change)); }
+    TArray<FY01RuntimeSourceId> Removals{SourceId(Target.ItemId)};
+    FY01ResolvedSource Source; Source.Kind = EY01RuntimeSourceKind::Devoured; Source.LocalKey = SourceId(Target.ItemId, EY01RuntimeSourceKind::Devoured).LocalKey;
+    for (const auto& Effect : UY01GrowthComponent::EquipmentEffects(Snapshot)) { Source.Effects.Add({Effect.EffectId, Effect.Kind, Effect.Magnitude, Effect.SourceAttribute, Effect.TargetAttribute, Effect.Amount,
+        Effect.Condition, Effect.ConditionThreshold, Effect.bGrowthContribution, Effect.DurationSeconds, Effect.LayerCap, Effect.IntervalSeconds}); }
+    TArray<FY01ResolvedSource> Additions; Additions.Add(MoveTemp(Source));
+    auto Receipt = Result;
+    auto* Sources = Player->GetSourceEffects();
+    FY01PreparedMutation Plan;
+    R = FromSource(Sources->PrepareMutation(Additions, Removals, Plan)); if (!R.IsOk()) { return R; }
+    FY01SourceTransaction Tx;
+    R = FromSource(Sources->StageMutationAt(Plan, Tx, Now)); if (!R.IsOk()) { return R; }
+    FY01ScopedSourceMutation Guard(MoveTemp(Tx));
+    R = CheckRequester(C); if (!R.IsOk()) { return R; }
+    R = CheckActive(); if (!R.IsOk()) { return R; }
+    R = Check(); if (!R.IsOk()) { return R; }
+    if (Transactions.bInterrupted || Revision != BeforeRevision) { return Fail(E::Interrupted, TEXT("暂存期间发生业务重入或库存改变")); }
+    R = FromSource(Guard.CommitAt([&]
+    {
+        Items.Remove(Target.ItemId); Order.Remove(Target.ItemId); EquipmentSlots[Request.Slot] = FGuid();
+        if (bPillRemoved) { Items.Remove(Pill.ItemId); Order.Remove(Pill.ItemId); }
+        else { Items.FindChecked(Pill.ItemId) = MoveTemp(Pill); }
+        Devoured.Add(MoveTemp(Snapshot));
+        Revision = Result.Revision;
+        Transactions.Record(Request, MoveTemp(Receipt));
+    }));
+    return R.IsOk() ? Result : R;
+}
 FY01ItemResult UY01LoadoutComponent::Observe(FY01LoadoutSnapshot& Out) const
 {
     Out = FY01LoadoutSnapshot();
@@ -395,7 +508,7 @@ FY01ItemResult UY01LoadoutComponent::Observe(FY01LoadoutSnapshot& Out) const
     if (Transactions.bBusy || (Player.IsValid() && Player->GetSourceEffects()->bBusy)) { return Fail(E::Busy, TEXT("事务期间不发布半份库存")); }
     auto R = CheckOwner(); if (!R.IsOk()) { return R; }
     Out.Revision = Revision; Out.ExpectedSeq = Transactions.ExpectedSeq; Out.EquipmentSlots = EquipmentSlots; Out.Items.Reserve(Order.Num());
-    Out.Skills = Skills; Out.ConfigRevision = ConfigRevision;
+    Out.Skills = Skills; Out.ConfigRevision = ConfigRevision; Out.Devoured = Devoured;
     for (const auto& Id : Order) { Out.Items.Add(Items.FindChecked(Id)); }
     return R;
 }
@@ -537,7 +650,8 @@ FY01ItemResult UY01LoadoutComponent::MutateSkill(AController* C, const FY01ItemR
         Grant.Source = Book.Definition; Grant.LearnedId = Next.LearnedId; Grant.Slot = Request.Slot;
         Grant.SkillType = Book.Skill.Type; Grant.CooldownSeconds = Book.Skill.CooldownSeconds; Grant.TestSkill = Book.Skill.TestSkill;
         FY01ResolvedSource Source; Source.Kind = EY01RuntimeSourceKind::Skill; Source.LocalKey = SourceId(Next.LearnedId, Source.Kind).LocalKey;
-        for (const auto& Effect : Book.Effects) { Source.Effects.Add({Effect.EffectId, Effect.Kind, Effect.Magnitude, Effect.SourceAttribute, Effect.TargetAttribute, Effect.Amount}); }
+        for (const auto& Effect : Book.Effects) { Source.Effects.Add({Effect.EffectId, Effect.Kind, Effect.Magnitude, Effect.SourceAttribute, Effect.TargetAttribute, Effect.Amount,
+            Effect.Condition, Effect.ConditionThreshold, Effect.bGrowthContribution, Effect.DurationSeconds, Effect.LayerCap, Effect.IntervalSeconds}); }
         Additions.Add(MoveTemp(Source));
         auto& Change = Result.Changes.AddDefaulted_GetRef(); Change.Kind = EY01ItemChangeKind::Removed; Change.Item = Book;
         ++Change.Item.EntityRevision; Change.Item.LastChangedRevision = Result.Revision;

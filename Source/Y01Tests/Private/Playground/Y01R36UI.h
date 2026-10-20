@@ -10,8 +10,9 @@
 #include "Y01R36UI.generated.h"
 
 // 只投影完整视图并构造意图，不拥有库存或决定交易成功。
-enum class EY01R36Zone : uint8 { Backpack, Equipment, Skill };
-enum class EY01R36PanelKind : uint8 { Character, Backpack, Shop };
+// Devoured为只读展示格，不参与拖放或请求。
+enum class EY01R36Zone : uint8 { Backpack, Equipment, Skill, Devoured };
+enum class EY01R36PanelKind : uint8 { Character, Backpack, Shop, Devoured };
 struct FY01R36Drag
 {
     EY01R36Zone Zone = EY01R36Zone::Backpack;
@@ -38,9 +39,21 @@ public:
     static TArray<FY01R36ProjectedFlight> Project(APlayerController* Owner, const TArray<FY01R36Flight>& Flights,
         const FGeometry& ViewportGeometry, const FGeometry& LayerGeometry);
 };
+struct FY01R36LogSegment
+{
+    FString Text;
+    FLinearColor Color = FLinearColor::White;
+};
+struct FY01R36LogEntry
+{
+    TArray<FY01R36LogSegment> Segments;
+    bool bFailure = false;
+    FString ToString() const;
+};
 class FY01R36UIModel
 {
 public:
+    static constexpr int32 MaxLogEntries = 3;
     bool Sync(const FY01CommittedView& Next);
     const FY01CommittedView& View() const { return Committed; }
     bool CanInteract(EY01MatchPhase Phase) const;
@@ -50,19 +63,32 @@ public:
     bool Decide(bool Confirm, EY01MatchPhase Phase, FY01ItemRequest& Out) const;
     bool Purchase(FName Offer, EY01MatchPhase Phase, FY01ItemRequest& Out) const;
     bool ChooseTalent(FName Talent, EY01MatchPhase Phase, FY01ItemRequest& Out) const;
-    bool ToggleMaterial(FGuid Item, EY01MatchPhase Phase);
+    // 包内最低可合品质优先，同品质先装备后技能，同组取最早获得的五件。
+    bool PickMaterials(TArray<FY01ItemConsume>& Out, FName& Recipe) const;
     bool Synthesize(EY01MatchPhase Phase, FY01ItemRequest& Out) const;
-    const TArray<FY01ItemConsume>& Materials() const { return SelectedMaterials; }
+    // 本地预检只用于给出灰色LOG原因；成功与否仍以服务器事务为准。
+    bool Devour(FGuid Pill, int32 Slot, EY01MatchPhase Phase, FY01ItemRequest& Out, FString* Reason = nullptr) const;
+    const FY01ViewItem* FindDevoured(FGuid Id) const;
     void Sent(const FY01ItemRequest& Request);
+    const TArray<FY01R36LogEntry>& GameLog() const { return Log; }
+    uint64 GetLogRevision() const { return LogRevision; }
+    void LogNotice(const FString& Text);
     bool IsPending() const { return bPending; }
     bool BlocksClosing(EY01R36PanelKind Panel) const;
     static FString WaveLabel(const FY01WaveSnapshot& Snapshot, double ServerTime);
     bool NeedsConfirmation() const;
     const FY01ViewItem* Find(FGuid Id) const;
     TArray<FGuid> Backpack() const;
+    // 装卸在途时的纯显示预览；权威视图、拖动和请求仍只用 View()/Backpack()。
+    bool IsPreviewing() const;
+    FGuid DisplaySlot(int32 Slot) const;
+    TArray<FGuid> DisplayBackpack() const;
     FString ItemLabel(FGuid Id) const;
     FString SkillLabel(int32 Slot, double ServerTime) const;
     FString Status() const;
+    static FString ErrorText(EY01ItemError Code);
+    // 日志区下方的提示行：只显示待视图、覆盖确认等阻塞状态，不重复成功回执。
+    FString Hint() const;
     static double Remaining(const FY01ViewSkill& Skill, double ServerTime);
     TArray<FY01R36Flight> Flights(double ServerTime, bool Enabled) const;
     void VisualTick(double ServerTime, const TArray<FGuid>& VisibleItems);
@@ -74,18 +100,24 @@ private:
     FY01CommittedView Committed;
     TMap<FGuid, int32> ItemIndices;
     FY01ItemRequest Pending;
-    TArray<FY01ItemConsume> SelectedMaterials;
     FY01ViewReceipt DisplayResponse;
     uint64 SentAtResponse = 0;
     bool bPending = false;
+    TArray<FY01R36LogEntry> Log;
+    uint64 LogRevision = 0;
+    TSet<FGuid> LoggedDeliveries;
     FY01ItemRequest Base(EY01ItemOperation Operation, int32 Slot) const;
+    void AddLog(FY01R36LogEntry Entry);
+    void LogReceipt(const FY01ViewReceipt& Receipt, const FY01CommittedView& Next);
 };
 
 class UY01R36Panel;
 class UTextBlock;
+class UProgressBar;
 class UBorder;
 class UImage;
 class UScrollBox;
+class UUniformGridPanel;
 UCLASS()
 class UY01R36EconomyButton : public UButton
 {
@@ -144,8 +176,12 @@ private:
     int32 SlotIndex = INDEX_NONE;
     FGuid ItemId;
     UPROPERTY() TObjectPtr<UTextBlock> Label;
+    // Frame为品质色边框，Fill为暗色底；到货闪光只改边框与底色，不改尺寸。
     UPROPERTY() TObjectPtr<UBorder> Frame;
-    UPROPERTY() TObjectPtr<UImage> Icon;
+    UPROPERTY() TObjectPtr<UBorder> Fill;
+    UPROPERTY() TObjectPtr<UBorder> Tip;
+    UPROPERTY() TObjectPtr<UTextBlock> TipName;
+    UPROPERTY() TObjectPtr<UTextBlock> TipBody;
 };
 UCLASS()
 class UY01R36Panel : public UUserWidget
@@ -163,21 +199,27 @@ public:
     bool RequestSkill(int32 Slot);
     bool RequestPurchase(FName Offer);
     bool RequestTalent(FName Talent);
-    bool ToggleMaterial(FGuid Item);
-    bool IsSelectingMaterials() const { return bSelectingMaterials; }
-    UFUNCTION() void MaterialMode();
+    // 点吞噬丹进入/退出吞噬模式；模式内点装备槽发起吞噬，右键取消。
+    bool ToggleDevour(FGuid Pill);
+    void CancelDevour();
+    bool RequestDevour(int32 TargetSlot);
+    FGuid GetDevourPill() const { return DevourPillId; }
+    // 背包换位只改本机显示顺序，不发服务器事务；新会话恢复获得顺序。
+    bool ReorderBackpack(const UY01R36DragOperation* Operation, FGuid Before);
     UFUNCTION() void Synthesize();
     UFUNCTION() void Confirm();
     UFUNCTION() void Cancel();
     UFUNCTION() void Advance();
     UFUNCTION() void Training();
-    UFUNCTION() void ToggleFlights();
     UFUNCTION() void ToggleCharacter();
     UFUNCTION() void ToggleBackpack();
     UFUNCTION() void ToggleShop();
+    UFUNCTION() void ToggleDevoured();
     bool IsCharacterExpanded() const { return bCharacterExpanded; }
     bool IsBackpackExpanded() const { return bBackpackExpanded; }
     bool IsShopExpanded() const { return bShopExpanded; }
+    bool IsDevouredExpanded() const { return bDevouredExpanded; }
+    const TArray<TObjectPtr<UY01R36Cell>>& GetDevouredCells() const { return DevouredCells; }
     bool CanTogglePanel(EY01R36PanelKind Panel) const;
     bool CanUseZone(EY01R36Zone Zone) const;
     bool CanDrag() const;
@@ -186,7 +228,6 @@ public:
     double GetWaveServerTime() const { return WaveServerTime; }
     FName GetWaveClockSource() const { return WaveClockSource; }
     double GetServerTime() const { return SampleTime; }
-    bool AreFlightsEnabled() const { return bFlightsEnabled; }
 protected:
     virtual TSharedRef<SWidget> RebuildWidget() override;
     virtual void NativeTick(const FGeometry& Geometry, float DeltaSeconds) override;
@@ -198,27 +239,45 @@ private:
     void RefreshWaves();
     void RefreshCoreAlert();
     void RefreshRevive();
+    void RefreshGameLog();
+    void RefreshAttributes();
+    void RefreshDevoured();
+    void RebuildBag();
     void TogglePanel(EY01R36PanelKind Panel);
-    bool bSelectingMaterials = false;
-    bool bFlightsEnabled = true;
-    bool bCharacterExpanded = false, bBackpackExpanded = false, bShopExpanded = false;
+    bool& Expanded(EY01R36PanelKind Panel);
+    bool IsExpanded(EY01R36PanelKind Panel) const;
+    bool bCharacterExpanded = false, bBackpackExpanded = false, bShopExpanded = false, bDevouredExpanded = false;
+    FGuid DevourPillId;
     FY01WaveSnapshot DisplayedWaves;
     double WaveServerTime = -1;
     FName WaveClockSource = TEXT("Unknown");
+    TArray<FGuid> BackpackOrder;
+    FGuid OrderMatchId, OrderConnectionId;
+    int32 OrderJoinSequence = 0;
+    uint64 ShownLogRevision = MAX_uint64;
     UPROPERTY() TObjectPtr<UCanvasPanel> CharacterPanel;
     UPROPERTY() TObjectPtr<UCanvasPanel> BackpackPanel;
     UPROPERTY() TObjectPtr<UCanvasPanel> ShopPanel;
+    UPROPERTY() TObjectPtr<UCanvasPanel> DevouredPanel;
     UPROPERTY() TObjectPtr<UButton> CharacterButton;
     UPROPERTY() TObjectPtr<UButton> BackpackButton;
     UPROPERTY() TObjectPtr<UButton> ShopButton;
-    UPROPERTY() TObjectPtr<UTextBlock> TopVitals;
+    UPROPERTY() TObjectPtr<UButton> DevouredButton;
+    UPROPERTY() TObjectPtr<class UWrapBox> DevouredList;
+    UPROPERTY() TObjectPtr<UTextBlock> DevouredEmpty;
+    UPROPERTY() TArray<TObjectPtr<UY01R36Cell>> DevouredCells;
+    UPROPERTY() TObjectPtr<UTextBlock> TopVitals; // 左上金币文本（原金币+生命合并文本，生命改由下方血条展示）
+    UPROPERTY() TObjectPtr<UProgressBar> HealthBar;
+    UPROPERTY() TObjectPtr<UProgressBar> ShieldBar;
+    UPROPERTY() TObjectPtr<UTextBlock> HealthText;
     UPROPERTY() TObjectPtr<UTextBlock> WaveCountdown;
     UPROPERTY() TObjectPtr<UTextBlock> CoreAlert;
     UPROPERTY() TObjectPtr<UTextBlock> ReviveCountdown;
     UPROPERTY() TObjectPtr<UTextBlock> BackpackHint;
+    UPROPERTY() TObjectPtr<UTextBlock> GrowthSummary;
+    UPROPERTY() TObjectPtr<class UVerticalBox> GameLog;
     UPROPERTY() TMap<FName, TObjectPtr<UTextBlock>> StatValues;
     UPROPERTY() TObjectPtr<UY01R36FlightLayer> FlightLayer;
-    UPROPERTY() TObjectPtr<UButton> FlightButton;
     FY01R36UIModel Model;
     EY01MatchPhase Phase = EY01MatchPhase::Waiting;
     double SampleTime = -1;
@@ -231,8 +290,9 @@ private:
     UPROPERTY() TObjectPtr<UButton> ConfirmButton;
     UPROPERTY() TObjectPtr<UButton> CancelButton;
     UPROPERTY() TObjectPtr<UScrollBox> ShopList;
+    UPROPERTY() TObjectPtr<UUniformGridPanel> EquipmentBoxes;
+    UPROPERTY() TObjectPtr<UUniformGridPanel> SkillBoxes;
     UPROPERTY() TObjectPtr<UScrollBox> TalentList;
-    UPROPERTY() TObjectPtr<UButton> MaterialButton;
     UPROPERTY() TObjectPtr<UButton> SynthesisButton;
     UPROPERTY() TArray<TObjectPtr<UY01R36EconomyButton>> OfferButtons;
     UPROPERTY() TArray<TObjectPtr<UY01R36EconomyButton>> TalentButtons;

@@ -23,6 +23,7 @@ struct Y01_API FY01KillEvent
     FGuid SpawnId;
     FY01DataRef Definition;
     TWeakObjectPtr<AY01PlayerState> Killer;
+    TWeakObjectPtr<AY01Monster> Monster;
     int32 JoinSequence = 0;
     uint64 Sequence = 0;
     uint64 SourceSession = 0;

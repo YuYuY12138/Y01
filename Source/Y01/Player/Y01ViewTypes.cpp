@@ -10,6 +10,7 @@
 #include "HAL/PlatformProcess.h"
 #include "Misc/SecureHash.h"
 #include "UObject/UnrealType.h"
+#include <limits>
 
 namespace Y01ViewTiming
 {
@@ -50,14 +51,14 @@ void Mark(const TCHAR* Stage, const FY01ViewAck& Scope, double Start, int32 Byte
 namespace
 {
 constexpr int32 WindowBytes = FY01ViewWire::ChunkBytes * FY01ViewWire::WindowChunks;
-constexpr uint32 AttributeWireVersion = 0x59303103;
-constexpr uint32 DeltaWireVersion = 0x59303104;
+constexpr uint32 AttributeWireVersion = 0x59303107;
+constexpr uint32 DeltaWireVersion = 0x59303108;
 enum : uint32
 {
     DGold = 1u << 0, DExperience = 1u << 1, DHealth = 1u << 2, DStats = 1u << 3,
     DGrowth = 1u << 4, DDelivery = 1u << 5, DIncome = 1u << 6, DEquipment = 1u << 7,
     DSkills = 1u << 8, DOffers = 1u << 9, DRecipes = 1u << 10, DTalent = 1u << 11,
-    DReceipts = 1u << 12, DResponse = 1u << 13, DTickets = 1u << 14
+    DReceipts = 1u << 12, DResponse = 1u << 13, DTickets = 1u << 14, DAttributes = 1u << 15, DDevoured = 1u << 16
 };
 enum : uint32
 {
@@ -67,26 +68,106 @@ enum : uint32
 enum : uint32
 {
     ODisplay = 1u << 0, OKind = 1u << 1, OPrice = 1u << 2, OQuantity = 1u << 3,
-    OPurchased = 1u << 4, OSourceKey = 1u << 5, OSourceId = 1u << 6, OEffects = 1u << 7, OGrowth = 1u << 8
+    OPurchased = 1u << 4, OSourceKey = 1u << 5, OSourceId = 1u << 6, OEffects = 1u << 7, OGrowth = 1u << 8,
+    OItemType = 1u << 9, OOdds = 1u << 10
 };
 bool Reject(FString& Error, const TCHAR* Message) { Error = Message; return false; }
 template<class T> bool Same(const T& A, const T& B) { return T::StaticStruct()->CompareScriptStruct(&A, &B, 0); }
 template<class A, class B> bool SameSession(const A& Left, const B& Right)
 { return Left.MatchId == Right.MatchId && Left.JoinSequence == Right.JoinSequence && Left.ConnectionId == Right.ConnectionId; }
 uint32 Hash(const TArray<uint8>& Bytes) { return FCrc::MemCrc32(Bytes.GetData(), Bytes.Num()); }
+bool ValidBreakdowns(const TArray<FY01AttributeBreakdown>& Rows)
+{
+    using A = EY01Attribute; using C = EY01ContributionKind;
+    if (Rows.IsEmpty()) { return true; } // 未初始化来源的旧夹具仍允许空明细。
+    if (Rows.Num() != static_cast<int32>(A::GoldGain)) { return false; }
+    const auto NonNegative = [](double Value) { return FMath::IsFinite(Value) && Value >= 0; };
+    const auto Close = [](double Actual, double Expected, double Rounding = 8.)
+    {
+        return FMath::IsFinite(Expected) && FMath::Abs(Actual - Expected) <= FMath::Max(1.e-9,
+            FMath::Abs(Expected) * std::numeric_limits<double>::epsilon() * Rounding);
+    };
+    const auto SourceKey = [](const FY01AttributeContribution& Entry)
+    {
+        if (Entry.Kind == C::Base) { return Entry.SourceKey == TEXT("基础"); }
+        if (Entry.Kind == C::Growth && Entry.SourceKey == TEXT("玩家成长")) { return true; }
+        FString Kind, Key;
+        if (!Entry.SourceKey.Split(TEXT("/"), &Kind, &Key) || Key.IsEmpty()
+            || (Kind != TEXT("0") && Kind != TEXT("1") && Kind != TEXT("2") && Kind != TEXT("3") && Kind != TEXT("4") && Kind != TEXT("5"))) { return false; }
+        for (TCHAR Character : Key)
+        { if (!FChar::IsAlnum(Character) && Character != TEXT('_') && Character != TEXT('-')) { return false; } }
+        return true;
+    };
+    for (int32 Index = 0; Index < Rows.Num(); ++Index)
+    {
+        const auto& Row = Rows[Index];
+        // 精确枚举顺序同时排除None、未知、重复或缺失行。
+        if (Row.Attribute != static_cast<A>(Index + 1) || !NonNegative(Row.Final)
+            || !NonNegative(Row.Subtotal) || !NonNegative(Row.PercentTotal)) { return false; }
+        double Subtotal = 0, Percent = 0;
+        for (const auto& Entry : Row.Contributions)
+        {
+            if (static_cast<uint8>(Entry.Kind) > static_cast<uint8>(C::Growth)
+                || !SourceKey(Entry) || !NonNegative(Entry.Amount) || !NonNegative(Entry.Contribution)
+                || !NonNegative(Entry.ConditionThreshold) || Entry.ConditionThreshold > 100
+                || (!Entry.bActive && Entry.Contribution != 0)) { return false; }
+            switch (Entry.Condition)
+            {
+            case EY01EffectCondition::None:
+                if (Entry.ConditionThreshold != 0 || !Entry.bActive) { return false; }
+                break;
+            case EY01EffectCondition::HealthBelow:
+            case EY01EffectCondition::HealthAbove:
+                if (!Y01Data::IsConditionalTarget(Row.Attribute)
+                    || (Entry.Kind != C::Flat && Entry.Kind != C::Percent)) { return false; }
+                break;
+            default: return false;
+            }
+            if (Entry.Kind == C::Mapping)
+            {
+                if (!Y01Data::IsPrimaryAttribute(Entry.SourceAttribute) || !Y01Data::IsDerivedAttribute(Row.Attribute)
+                    || Entry.Condition != EY01EffectCondition::None) { return false; }
+            }
+            else if (Entry.SourceAttribute != A::None || Entry.Contribution != (Entry.bActive ? Entry.Amount : 0)) { return false; }
+            if (Entry.Kind == C::Percent)
+            {
+                if (Row.Attribute == A::GoldPerSecond) { return false; }
+                Percent += Entry.Contribution;
+            }
+            else
+            {
+                if (Row.Attribute == A::GoldGain) { return false; }
+                Subtotal += Entry.Contribution;
+            }
+            if (!NonNegative(Subtotal) || !NonNegative(Percent)) { return false; }
+        }
+        // 映射在解析器中先合并系数；贡献显示逐项相乘，求和检查容纳该舍入顺序差异。
+        const double SumRounding = FMath::Max(8., double(Row.Contributions.Num()) * 2.);
+        if (!Close(Row.Subtotal, Subtotal, SumRounding) || !Close(Row.PercentTotal, Percent, SumRounding)) { return false; }
+        if (Row.Attribute == A::GoldGain)
+        {
+            if (Row.Subtotal != 0 || Row.Final != Row.PercentTotal) { return false; }
+        }
+        else if (!Close(Row.Final, Row.Subtotal * (1. + Row.PercentTotal / 100.))) { return false; }
+    }
+    return true;
+}
 bool ValidView(const FY01CommittedView& V)
 {
     if (!V.MatchId.IsValid() || V.JoinSequence <= 0 || !V.ConnectionId.IsValid() || !V.ViewRevision || !V.Revision
         || !V.ConfigRevision || !V.ExpectedSeq || V.EquipmentSlots.Num() != Y01Data::EquipmentSlotCount
-        || V.Skills.Num() != Y01Data::SkillSlotCount || V.Receipts.Num() > 64 || V.Tickets.Num() != Y01Data::SkillSlotCount) { return false; }
+        || V.Skills.Num() != Y01Data::SkillSlotCount || V.Receipts.Num() > 64 || V.Tickets.Num() != Y01Data::SkillSlotCount
+        || !ValidBreakdowns(V.AttributeBreakdowns)) { return false; }
     const auto FloatValue = [](double Value)
     { return FMath::IsFinite(Value) && Value >= 0 && Value <= MAX_flt && (Value == 0 || static_cast<float>(Value) > 0); };
     const auto& Ledger = V.Growth;
-    if (!FloatValue(Ledger.Strength) || (Ledger.AppliedKills != 0) != Ledger.LastKillEventId.IsValid()
-        || (Ledger.GrowthFault != EY01ItemError::None) != Ledger.FaultKillEventId.IsValid()
+    if (!FloatValue(Ledger.Strength) || !FloatValue(Ledger.Agility) || !FloatValue(Ledger.Wisdom) || !FloatValue(Ledger.MaxHealth)
+        || (Ledger.AppliedKills != 0) != Ledger.LastKillEventId.IsValid()
+        || (Ledger.FaultKillEventId.IsValid() && Ledger.GrowthFault == EY01ItemError::None)
         || static_cast<uint8>(Ledger.GrowthFault) > static_cast<uint8>(EY01ItemError::PurchaseLimit)
         || (Ledger.GrowthFault == EY01ItemError::None && !Ledger.FaultMessage.IsEmpty())) { return false; }
-    if (!Ledger.bEnabled && (Ledger.bEnded || Ledger.AppliedKills || Ledger.Strength != 0 || !Ledger.PlayerRules.IsEmpty()
+    if (!Ledger.bEnabled && (Ledger.bEnded || Ledger.AppliedKills || Ledger.Strength != 0 || Ledger.Agility != 0
+        || Ledger.Wisdom != 0 || Ledger.MaxHealth != 0 || !Ledger.PlayerRules.IsEmpty()
         || Ledger.FaultKillEventId.IsValid())) { return false; }
     const FString Prefix = FString::Printf(TEXT("R36/%s/P%d/"), *V.MatchId.ToString(EGuidFormats::DigitsWithHyphens), V.JoinSequence);
     TMap<FString, TSet<FName>> PlayerRules;
@@ -95,13 +176,17 @@ bool ValidView(const FY01CommittedView& V)
         const auto& G = Entry.Rule; FString Kind, Key;
         if (!Entry.SourceId.StartsWith(Prefix, ESearchCase::CaseSensitive)
             || !Entry.SourceId.Mid(Prefix.Len()).Split(TEXT("/"), &Kind, &Key)
-            || (Kind != TEXT("Equipment") && Kind != TEXT("Skill") && Kind != TEXT("Shop") && Kind != TEXT("Talent"))) { return false; }
+            || (Kind != TEXT("Equipment") && Kind != TEXT("Skill") && Kind != TEXT("Shop") && Kind != TEXT("Talent")
+                && Kind != TEXT("Devoured"))) { return false; }
         if (Key.IsEmpty() || Key.Len() > 128) { return false; }
         for (TCHAR C : Key) { if (!FChar::IsAlnum(C) && C != TEXT('_') && C != TEXT('-')) { return false; } }
         auto& Seen = PlayerRules.FindOrAdd(Entry.SourceId);
-        if (G.RuleId.IsNone() || Seen.Contains(G.RuleId) || G.Trigger != EY01GrowthTrigger::EffectiveKill
-            || G.Target != EY01GrowthTarget::Player || G.Attribute != EY01GrowthAttribute::Strength
-            || !FloatValue(G.Delta) || !FloatValue(G.Accumulated) || !G.AppliedCount || G.AppliedCount > Ledger.AppliedKills) { return false; }
+        if (G.RuleId.IsNone() || Seen.Contains(G.RuleId)
+            || !(G.Trigger == EY01GrowthTrigger::EffectiveKill || G.Trigger == EY01GrowthTrigger::CombatTime
+                || G.Trigger == EY01GrowthTrigger::BasicAttack)
+            || G.Target != EY01GrowthTarget::Player || G.Attribute == EY01GrowthAttribute::AttackDamage
+            || !FloatValue(G.Delta) || !FloatValue(G.Accumulated) || !G.AppliedCount
+            || (G.Trigger == EY01GrowthTrigger::EffectiveKill && G.AppliedCount > Ledger.AppliedKills)) { return false; }
         Seen.Add(G.RuleId);
     }
     const auto ValidRules = [&](const TArray<FY01ItemGrowth>& Rules, bool Equipment)
@@ -112,8 +197,10 @@ bool ValidView(const FY01CommittedView& V)
         for (const auto& G : Rules)
         {
             const bool Instance = G.Target == EY01GrowthTarget::EquipmentInstance && G.Attribute == EY01GrowthAttribute::AttackDamage;
-            const bool Player = G.Target == EY01GrowthTarget::Player && G.Attribute == EY01GrowthAttribute::Strength;
-            if (G.RuleId.IsNone() || Seen.Contains(G.RuleId) || G.Trigger != EY01GrowthTrigger::EffectiveKill
+            const bool Player = G.Target == EY01GrowthTarget::Player && G.Attribute != EY01GrowthAttribute::AttackDamage;
+            if (G.RuleId.IsNone() || Seen.Contains(G.RuleId)
+                || !(G.Trigger == EY01GrowthTrigger::EffectiveKill || G.Trigger == EY01GrowthTrigger::CombatTime
+                    || G.Trigger == EY01GrowthTrigger::BasicAttack)
                 || (!Player && !(Equipment && Instance)) || !FMath::IsFinite(G.Delta) || G.Delta < 0
                 || !FloatValue(G.Accumulated) || (!Instance && (G.AppliedCount || G.Accumulated != 0))
                 || (!G.AppliedCount && G.Accumulated != 0)) { return false; }
@@ -136,13 +223,17 @@ bool ValidView(const FY01CommittedView& V)
     for (const auto& S : V.ShopOffers)
     {
         if (S.OfferId.IsNone() || Offers.Contains(S.OfferId) || S.Price < 0 || S.Quantity <= 0
-            || (S.ShopKind != EY01ShopKind::RandomPool && S.ShopKind != EY01ShopKind::RandomTier && S.ShopKind != EY01ShopKind::DirectEffect)) { return false; }
+            || (S.ShopKind != EY01ShopKind::RandomPool && S.ShopKind != EY01ShopKind::RandomTier && S.ShopKind != EY01ShopKind::DirectEffect
+                && S.ShopKind != EY01ShopKind::DirectItem)) { return false; }
         Offers.Add(S.OfferId);
+        for (const auto& O : S.Odds)
+        { if (static_cast<uint8>(O.Quality) > static_cast<uint8>(EY01Quality::Red) || !FMath::IsFinite(O.Weight) || O.Weight <= 0) { return false; } }
         if (S.ShopKind != EY01ShopKind::DirectEffect)
         {
             if (S.bPurchased || !S.SourceKey.IsEmpty() || !S.SourceId.IsEmpty() || !S.Effects.IsEmpty() || !S.Growth.IsEmpty()) { return false; }
             continue;
         }
+        if (S.ItemType != EY01TableKind::None || !S.Odds.IsEmpty()) { return false; }
         const FString Key = S.OfferId.ToString().ToLower();
         if (S.Quantity != 1 || Key.IsEmpty() || Key.Len() > 128 || S.SourceKey != Key
             || S.SourceId != FString::Printf(TEXT("R36/%s/P%d/Shop/%s"), *V.MatchId.ToString(EGuidFormats::DigitsWithHyphens), V.JoinSequence, *Key)
@@ -159,8 +250,10 @@ bool ValidView(const FY01CommittedView& V)
         }
         for (const auto& G : S.Growth)
         {
-            if (G.RuleId.IsNone() || Growth.Contains(G.RuleId) || G.Trigger != EY01GrowthTrigger::EffectiveKill
-                || G.Target != EY01GrowthTarget::Player || G.Attribute != EY01GrowthAttribute::Strength
+            if (G.RuleId.IsNone() || Growth.Contains(G.RuleId)
+                || !(G.Trigger == EY01GrowthTrigger::EffectiveKill || G.Trigger == EY01GrowthTrigger::CombatTime
+                    || G.Trigger == EY01GrowthTrigger::BasicAttack)
+                || G.Target != EY01GrowthTarget::Player || G.Attribute == EY01GrowthAttribute::AttackDamage
                 || !FMath::IsFinite(G.Delta) || G.Delta < 0 || G.AppliedCount != 0 || G.Accumulated != 0) { return false; }
             Growth.Add(G.RuleId);
         }
@@ -204,8 +297,10 @@ bool ValidView(const FY01CommittedView& V)
             }
             for (const auto& G : C.Growth)
             {
-                if (G.RuleId.IsNone() || Growth.Contains(G.RuleId) || G.Trigger != EY01GrowthTrigger::EffectiveKill
-                    || G.Target != EY01GrowthTarget::Player || G.Attribute != EY01GrowthAttribute::Strength
+                if (G.RuleId.IsNone() || Growth.Contains(G.RuleId)
+                    || !(G.Trigger == EY01GrowthTrigger::EffectiveKill || G.Trigger == EY01GrowthTrigger::CombatTime
+                        || G.Trigger == EY01GrowthTrigger::BasicAttack)
+                    || G.Target != EY01GrowthTarget::Player || G.Attribute == EY01GrowthAttribute::AttackDamage
                     || !FMath::IsFinite(G.Delta) || G.Delta < 0 || G.AppliedCount || G.Accumulated != 0) { return false; }
                 Growth.Add(G.RuleId);
             }
@@ -224,7 +319,8 @@ bool ValidView(const FY01CommittedView& V)
         if (!R.DeliveryId.IsValid() || !R.KillEventId.IsValid() || !R.ItemId.IsValid()
             || R.MatchId != V.MatchId || R.JoinSequence != V.JoinSequence
             || DeliveryIds.Contains(R.DeliveryId) || DeliveryItems.Contains(R.ItemId)
-            || (R.Definition.Type != EY01TableKind::Equipment && R.Definition.Type != EY01TableKind::Skill)
+            || (R.Definition.Type != EY01TableKind::Equipment && R.Definition.Type != EY01TableKind::Skill
+                && R.Definition.Type != EY01TableKind::Consumable)
             || R.Definition.RowName.IsNone() || static_cast<uint8>(R.Quality) > static_cast<uint8>(EY01Quality::Red)
             || R.Origin.ContainsNaN() || !NonNegative(R.StartTime) || !NonNegative(R.ETA) || R.ETA < R.StartTime
             || !NonNegative(R.DelaySeconds) || !NonNegative(R.DeliveredTime)
@@ -247,6 +343,7 @@ bool ValidView(const FY01CommittedView& V)
     {
         if (!I.ItemId.IsValid() || Ids.Contains(I.ItemId) || !I.EntityRevision || !I.LastChangedRevision
             || I.LastChangedRevision > V.Revision || I.AcquisitionOrder <= Order
+            || I.Count < 1 || (I.Count != 1 && I.Definition.Type != EY01TableKind::Consumable)
             || !ValidRules(I.Growth, I.Definition.Type == EY01TableKind::Equipment)
             || !ValidEffects(I.Effects, I.Definition.Type == EY01TableKind::Equipment)
             || !Y01Damage::ValidateSource(I.DamageEffects, I.Definition.Type, I.Display.SkillType)) { return false; }
@@ -272,6 +369,16 @@ bool ValidView(const FY01CommittedView& V)
         else if (I.Location != EY01ItemLocation::Backpack || I.Slot != INDEX_NONE) { return false; }
     }
     if (Slots != V.EquipmentSlots) { return false; }
+    TSet<FName> DevouredRows;
+    for (const auto& I : V.Devoured)
+    {
+        if (!I.ItemId.IsValid() || Ids.Contains(I.ItemId) || I.Definition.Type != EY01TableKind::Equipment
+            || I.Definition.RowName.IsNone() || DevouredRows.Contains(I.Definition.RowName) || I.Display.Quality != EY01Quality::Red
+            || I.Count != 1 || I.Location != EY01ItemLocation::Backpack || I.Slot != INDEX_NONE
+            || !ValidRules(I.Growth, true) || !ValidEffects(I.Effects, true)
+            || !Y01Damage::ValidateSource(I.DamageEffects, EY01TableKind::Equipment, I.Display.SkillType)) { return false; }
+        Ids.Add(I.ItemId); DevouredRows.Add(I.Definition.RowName);
+    }
     TSet<FName> Skills;
     for (int32 Index = 0; Index < V.Skills.Num(); ++Index)
     {
@@ -334,6 +441,9 @@ void BuildDelta(const FY01CommittedView& Base, const FY01CommittedView& Latest, 
     if (!Same(Latest.Growth, Base.Growth)) { D.Fields |= DGrowth; SetOptional(D.Growth, Latest.Growth); }
     if (!Same(Latest.Delivery, Base.Delivery)) { D.Fields |= DDelivery; SetOptional(D.Delivery, Latest.Delivery); }
     if (Latest.IncomeRate != Base.IncomeRate) { D.Fields |= DIncome; D.IncomeRate = Latest.IncomeRate; }
+    if (!SameArray(Latest.AttributeBreakdowns, Base.AttributeBreakdowns))
+    { D.Fields |= DAttributes; D.AttributeBreakdowns = Latest.AttributeBreakdowns; }
+    if (!SameArray(Latest.Devoured, Base.Devoured)) { D.Fields |= DDevoured; D.Devoured = Latest.Devoured; }
     for (int32 Index = 0; Index < Latest.EquipmentSlots.Num(); ++Index)
     {
         if (Latest.EquipmentSlots[Index] != Base.EquipmentSlots[Index])
@@ -373,6 +483,8 @@ void BuildDelta(const FY01CommittedView& Base, const FY01CommittedView& Latest, 
             if (N.SourceId != O.SourceId) { V.Fields |= OSourceId; V.SourceId = N.SourceId; }
             if (!SameArray(N.Effects, O.Effects)) { V.Fields |= OEffects; V.Effects = N.Effects; }
             if (!SameArray(N.Growth, O.Growth)) { V.Fields |= OGrowth; V.Growth = N.Growth; }
+            if (N.ItemType != O.ItemType) { V.Fields |= OItemType; V.ItemType = N.ItemType; }
+            if (!SameArray(N.Odds, O.Odds)) { V.Fields |= OOdds; V.Odds = N.Odds; }
         }
     }
     if (!SameArray(Latest.SynthesisRecipes, Base.SynthesisRecipes))
@@ -435,12 +547,14 @@ bool Apply(const FY01ViewCommit& Commit, const FY01CommittedView& Base, FY01Comm
 }
 bool Apply(const FY01ViewDeltaCommit& D, const FY01CommittedView& Base, FY01CommittedView& Out)
 {
-    constexpr uint32 All = (DTickets << 1) - 1;
+    constexpr uint32 All = (DDevoured << 1) - 1;
     if (!Base.ViewRevision || D.BaseViewRevision != Base.ViewRevision || !SameSession(Base, D)
         || D.ViewRevision <= Base.ViewRevision || (D.Fields & ~All)
         || !Optional(D.Fields, DStats, D.Stats) || !Optional(D.Fields, DGrowth, D.Growth)
         || !Optional(D.Fields, DDelivery, D.Delivery) || !Optional(D.Fields, DTalent, D.TalentChoice)
-        || !Optional(D.Fields, DResponse, D.Response)) { return false; }
+        || !Optional(D.Fields, DResponse, D.Response)
+        || (!(D.Fields & DAttributes) && !D.AttributeBreakdowns.IsEmpty())
+        || (!(D.Fields & DDevoured) && !D.Devoured.IsEmpty())) { return false; }
     Out = Base; Out.MatchId = D.MatchId; Out.JoinSequence = D.JoinSequence; Out.ConnectionId = D.ConnectionId;
     Out.ViewRevision = D.ViewRevision; Out.Revision = D.Revision; Out.SourceRevision = D.SourceRevision;
     Out.ConfigRevision = D.ConfigRevision; Out.ExpectedSeq = D.ExpectedSeq; Out.SampleTime = D.SampleTime;
@@ -448,6 +562,8 @@ bool Apply(const FY01ViewDeltaCommit& D, const FY01CommittedView& Base, FY01Comm
     if (D.Fields & DHealth) { Out.Health = D.Health; } if (D.Fields & DStats) { Out.Stats = D.Stats[0]; }
     if (D.Fields & DGrowth) { Out.Growth = D.Growth[0]; } if (D.Fields & DDelivery) { Out.Delivery = D.Delivery[0]; }
     if (D.Fields & DIncome) { Out.IncomeRate = D.IncomeRate; }
+    if (D.Fields & DAttributes) { Out.AttributeBreakdowns = D.AttributeBreakdowns; }
+    if (D.Fields & DDevoured) { Out.Devoured = D.Devoured; }
     TSet<int32> Slots;
     for (const auto& V : D.EquipmentSlots)
     { if (!(D.Fields & DEquipment) || !Out.EquipmentSlots.IsValidIndex(V.Index) || Slots.Contains(V.Index)) { return false; } Slots.Add(V.Index); Out.EquipmentSlots[V.Index] = V.Value; }
@@ -472,7 +588,7 @@ bool Apply(const FY01ViewDeltaCommit& D, const FY01CommittedView& Base, FY01Comm
         TSet<FName> Changed;
         for (const auto& V : D.ChangedShopOffers)
         {
-            constexpr uint32 AllOffer = (OGrowth << 1) - 1;
+            constexpr uint32 AllOffer = (OOdds << 1) - 1;
             if (V.OfferId.IsNone() || Changed.Contains(V.OfferId) || !V.Fields || (V.Fields & ~AllOffer)) { return false; }
             Changed.Add(V.OfferId); auto& N = Values.FindOrAdd(V.OfferId); N.OfferId = V.OfferId;
             if (V.Fields & ODisplay) { N.DisplayName = V.DisplayName; } if (V.Fields & OKind) { N.ShopKind = V.ShopKind; }
@@ -480,6 +596,7 @@ bool Apply(const FY01ViewDeltaCommit& D, const FY01CommittedView& Base, FY01Comm
             if (V.Fields & OPurchased) { N.bPurchased = V.bPurchased; } if (V.Fields & OSourceKey) { N.SourceKey = V.SourceKey; }
             if (V.Fields & OSourceId) { N.SourceId = V.SourceId; } if (V.Fields & OEffects) { N.Effects = V.Effects; }
             if (V.Fields & OGrowth) { N.Growth = V.Growth; }
+            if (V.Fields & OItemType) { N.ItemType = V.ItemType; } if (V.Fields & OOdds) { N.Odds = V.Odds; }
         }
         Out.ShopOffers.Reset(); TSet<FName> Seen;
         for (FName Id : D.ShopOfferOrder)

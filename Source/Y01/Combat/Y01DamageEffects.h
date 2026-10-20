@@ -49,7 +49,7 @@ public:
     UY01TemplateDamageEffect();
 };
 
-// 仅复制占位表现；没有碰撞伤害、RPC授权或奖励回调。
+// 仅复制占位表现；没有碰撞伤害、RPC授权或奖励回调。Product为Instant时是主动区域技能的短暂范围指示圈。
 UCLASS()
 class Y01_API AY01DamageVisual : public AActor
 {
@@ -57,6 +57,8 @@ class Y01_API AY01DamageVisual : public AActor
 public:
     AY01DamageVisual();
     void Configure(EY01DamageProduct InProduct, double InRadius);
+    EY01DamageProduct GetProduct() const { return Product; }
+    float GetRadius() const { return Radius; }
     virtual void Tick(float DeltaSeconds) override;
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Out) const override;
 private:

@@ -5,6 +5,7 @@
 #include "Player/Y01GrowthComponent.h"
 #include "Player/Y01ReviveComponent.h"
 #include "Combat/Y01Monster.h"
+#include "Combat/Y01DamagePipeline.h"
 #include "Match/Y01GameFlow.h"
 #include "AbilitySystemGlobals.h"
 #include "Engine/World.h"
@@ -72,6 +73,8 @@ void UY01DamageEffectsComponent::SynchronizeCommitted()
     TArray<FCommitted> Committed;
     for (const auto& Id : L->EquipmentSlots)
     { if (const auto* Item=L->Items.Find(Id)) { Committed.Add({L->SourceId(Id).Id, {}, Item->DamageEffects}); } }
+    for (const auto& D : L->Devoured)
+    { Committed.Add({L->SourceId(D.ItemId,EY01RuntimeSourceKind::Devoured).Id, {}, D.DamageEffects}); }
     for (const auto& Skill : L->Skills)
     { if (Skill.LearnedId.IsValid()) { Committed.Add({L->SourceId(Skill.LearnedId,EY01RuntimeSourceKind::Skill).Id, Skill.LearnedId, Skill.DamageEffects}); } }
     auto Add=[&](const FString& Source, const FGuid& Learned, const TArray<FY01ItemDamageEffect>& Effects)
@@ -88,6 +91,8 @@ void UY01DamageEffectsComponent::SynchronizeCommitted()
             if (E.Config.Trigger==EY01DamageTrigger::Bound)
             {
                 FProduct Product; Product.Id=++Serial; Product.SourceId=Key; Product.Generation=New.Generation; Product.Effect=E;
+                // 重进房/重同步视为重新放置：绑定区域在创建时判一次暴击。
+                Product.bCritical=Y01DamagePipeline::RollCritical(P->GetCombatASC());
                 Product.Position=P->GetCombatASC()->GetAvatarActor()->GetActorLocation(); Product.Expires=TNumericLimits<double>::Max(); Product.LastMove=Time;
                 if (!MakeVisual(Product)) { return; }
                 const uint64 Id = Product.Id; Products.Add(Id,MoveTemp(Product));
@@ -131,7 +136,8 @@ void UY01DamageEffectsComponent::Update(double Time)
         if (Snapshot<0 || !Y01Damage::Select(Player()->GetCombatASC(),Source.Effect.Config,Candidates(),Random,Selected)) { continue; }
         // 先登记发动，再允许伤害委托重入；落空同样已发动。
         Sources.FindChecked(Key).Next=Time+Source.Effect.Config.PeriodSeconds;
-        Launch(Source,Selected,Snapshot,Time);
+        // 周期效果每次发射视为一次放置：现掷一次暴击，直击与产物沿用。
+        Launch(Source,Selected,Snapshot,Time,Y01DamagePipeline::RollCritical(Player()->GetCombatASC()));
     }
 }
 bool UY01DamageEffectsComponent::CanActivate(FGameplayAbilitySpecHandle Handle) const
@@ -158,7 +164,12 @@ bool UY01DamageEffectsComponent::PrepareActive(FGameplayAbilitySpecHandle Handle
     {
         const auto& S=Sources.FindChecked(Key); if (S.LearnedId!=Learned || S.Effect.Config.Trigger!=EY01DamageTrigger::Active) { continue; }
         FActiveCast C; C.Source=S; C.Snapshot=Y01Damage::Evaluate(S.Effect.Config,Player()->GetCombatASC()->GetUnitStats());
-        if (C.Snapshot>=0 && Y01Damage::Select(Player()->GetCombatASC(),S.Effect.Config,Actors,Random,C.Selection)) { Out.Add(MoveTemp(C)); }
+        if (C.Snapshot>=0 && Y01Damage::Select(Player()->GetCombatASC(),S.Effect.Config,Actors,Random,C.Selection))
+        {
+            // 主动施放在快照时刻判定一次暴击，随施放数据流传入Launch；被丢弃的施放不消耗掷点。
+            C.bCritical=Y01DamagePipeline::RollCritical(Player()->GetCombatASC());
+            Out.Add(MoveTemp(C));
+        }
     }
     return !Out.IsEmpty();
 }
@@ -172,7 +183,7 @@ void UY01DamageEffectsComponent::ExecuteActive(const TArray<FActiveCast>& Casts,
         if (Epoch!=StartEpoch || !CanRun(Handle)) { return; }
         const auto* Current=Sources.Find(C.Source.Id);
         if (!Current || Current->Generation!=C.Source.Generation) { continue; }
-        Launch(C.Source,C.Selection,C.Snapshot,Now());
+        Launch(C.Source,C.Selection,C.Snapshot,Now(),C.bCritical);
     }
 }
 bool UY01DamageEffectsComponent::MakeVisual(FProduct& P)
@@ -188,14 +199,14 @@ void UY01DamageEffectsComponent::RemoveProduct(uint64 Id)
 {
     FProduct Old; if (Products.RemoveAndCopyValue(Id,Old) && Old.Visual.IsValid()) { Old.Visual->Destroy(); }
 }
-void UY01DamageEffectsComponent::Launch(const FSource& Source,const FY01DamageSelection& Selected,float Snapshot,double Time)
+void UY01DamageEffectsComponent::Launch(const FSource& Source,const FY01DamageSelection& Selected,float Snapshot,double Time,bool bCritical)
 {
     const uint64 StartEpoch=Epoch; const auto& R=Source.Effect.Config;
-    UE_LOG(LogTemp,Display,TEXT("Y01DamageNext LAUNCH Source=%s Generation=%llu Time=%.6f Product=%d Base=%g Targets=%d"),
-        *Source.Id,Source.Generation,Time,int32(R.Product),Snapshot,Selected.Targets.Num());
+    UE_LOG(LogTemp,Display,TEXT("Y01DamageNext LAUNCH Source=%s Generation=%llu Time=%.6f Product=%d Base=%g Crit=%d Targets=%d"),
+        *Source.Id,Source.Generation,Time,int32(R.Product),Snapshot,bCritical?1:0,Selected.Targets.Num());
     if (R.Product==EY01DamageProduct::IndependentArea)
     {
-        FProduct P; P.Id=++Serial; P.SourceId=Source.Id; P.Generation=Source.Generation; P.Effect=Source.Effect;
+        FProduct P; P.Id=++Serial; P.SourceId=Source.Id; P.Generation=Source.Generation; P.Effect=Source.Effect; P.bCritical=bCritical;
         P.Position=R.Position==EY01DamagePosition::FollowPlayer ? Player()->GetCombatASC()->GetAvatarActor()->GetActorLocation() : Selected.Center;
         P.Expires=Time+R.Lifetime; P.LastMove=Time;
         if (!MakeVisual(P)) { return; }
@@ -206,7 +217,8 @@ void UY01DamageEffectsComponent::Launch(const FSource& Source,const FY01DamageSe
     {
         if (StartEpoch!=Epoch || !CanRun(ActiveHandle)) { return; }
         auto* ASC=Player()->GetCombatASC(); if (!ASC->IsLegalCombatTarget(Target.Get())) { continue; }
-        if (R.Product==EY01DamageProduct::Instant) { Hit(Execution,0,Target.Get(),Snapshot); continue; }
+        // 直击沿用发射时判定的暴击；可吸血随来源效果配置。
+        if (R.Product==EY01DamageProduct::Instant) { Hit(Execution,0,Target.Get(),Snapshot,bCritical,R.bLifesteal); continue; }
         if (R.Product==EY01DamageProduct::AttachedDot)
         {
             int32 Count=0; uint64 Shortest=0; double Deadline=TNumericLimits<double>::Max();
@@ -220,13 +232,21 @@ void UY01DamageEffectsComponent::Launch(const FSource& Source,const FY01DamageSe
             if (Count>=R.MaxStacks)
             { Products.FindChecked(Shortest).Expires=Time+R.Lifetime; continue; }
         }
-        FProduct P; P.Id=++Serial; P.SourceId=Source.Id; P.Generation=Source.Generation; P.Effect=Source.Effect; P.Target=Target;
+        FProduct P; P.Id=++Serial; P.SourceId=Source.Id; P.Generation=Source.Generation; P.Effect=Source.Effect; P.Target=Target; P.bCritical=bCritical;
         auto* TargetASC=Cast<UY01CombatAbilitySystem>(UAbilitySystemGlobals::GetAbilitySystemComponentFromActor(Target.Get()));
         P.TargetSession=TargetASC->GetCombatSession(); P.Snapshot=Snapshot; P.Expires=Time+R.Lifetime; P.LastMove=Time;
         P.Position=R.Product==EY01DamageProduct::Projectile ? ASC->GetAvatarActor()->GetActorLocation() : Target->GetActorLocation();
         if (!MakeVisual(P)) { return; }
         const uint64 Id=P.Id; Products.Add(Id,MoveTemp(P));
         if (R.Product==EY01DamageProduct::AttachedDot) { Advance(Id,Time); }
+    }
+    // 主动区域即时技能在结算完成后补一个只读范围圈；不进产物账本，不影响命中、施放或冷却。
+    if (R.Product==EY01DamageProduct::Instant && R.Trigger==EY01DamageTrigger::Active
+        && R.Targeting!=EY01DamageTargeting::NearbyCount && StartEpoch==Epoch && CanRun(ActiveHandle))
+    {
+        FActorSpawnParameters Params; Params.Owner=GetOwner(); Params.SpawnCollisionHandlingOverride=ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+        auto* V=GetWorld()->SpawnActor<AY01DamageVisual>(Selected.Center,FRotator::ZeroRotator,Params);
+        if (IsValid(V)) { V->Configure(EY01DamageProduct::Instant,R.Radius); V->SetLifeSpan(.5f); }
     }
 }
 void UY01DamageEffectsComponent::Advance(uint64 Id,double Time)
@@ -250,7 +270,8 @@ void UY01DamageEffectsComponent::Advance(uint64 Id,double Time)
         {
             // 在应用GE之前退休产物，重复调度或目标死亡回调不能再次命中。
             RemoveProduct(Id);
-            if (Epoch == StartEpoch) { Hit(Id,1,Copy.Target.Get(),Copy.Snapshot); }
+            // 飞行物命中沿用发射时产物携带的暴击；可吸血随来源效果配置。
+            if (Epoch == StartEpoch) { Hit(Id,1,Copy.Target.Get(),Copy.Snapshot,Copy.bCritical,Copy.Effect.Config.bLifesteal); }
             return;
         }
         Live->Position=Copy.Position+(TargetPosition-Copy.Position).GetSafeNormal()*Step; Live->LastMove=Time;
@@ -283,10 +304,11 @@ void UY01DamageEffectsComponent::Advance(uint64 Id,double Time)
         Beat->Next+=(FMath::FloorToDouble((Time-Beat->Next)/R.TickSeconds)+1)*R.TickSeconds;
         const uint64 BeatSerial=++Beat->Serial;
         const float Damage=Y01Damage::Evaluate(R,ASC->GetUnitStats());
-        if (Damage>=0) { Hit(Id,BeatSerial,Target,Damage); }
+        // 每跳沿用放置时判定的产物暴击；可吸血随来源效果配置。
+        if (Damage>=0) { Hit(Id,BeatSerial,Target,Damage,Copy.bCritical,Copy.Effect.Config.bLifesteal); }
     }
 }
-void UY01DamageEffectsComponent::Hit(uint64 Execution,uint64 Beat,AActor* Target,float Damage)
+void UY01DamageEffectsComponent::Hit(uint64 Execution,uint64 Beat,AActor* Target,float Damage,bool bCritical,bool bLifesteal)
 {
     if (!bUpdating || !CanRun(ActiveHandle) || !FMath::IsFinite(Damage) || Damage<0) { return; }
     auto* ASC=Player()->GetCombatASC();
@@ -297,18 +319,20 @@ void UY01DamageEffectsComponent::Hit(uint64 Execution,uint64 Beat,AActor* Target
     Targets.Add(Target, Beat);
     auto Context=ASC->MakeEffectContext(); Context.AddSourceObject(this);
     auto Spec=ASC->MakeOutgoingSpec(UY01TemplateDamageEffect::StaticClass(),1,Context); if (!Spec.IsValid()) { return; }
-    AuthorizedContext=Context.Get(); AuthorizedTarget=TargetASC; AuthorizedDamage=Damage; bAuthorizationAvailable=true;
-    ON_SCOPE_EXIT { AuthorizedContext=nullptr; AuthorizedTarget.Reset(); bAuthorizationAvailable=false; };
-    UE_LOG(LogTemp,Display,TEXT("Y01DamageNext HIT Execution=%llu Beat=%llu Target=%s Base=%g"),Execution,Beat,*Target->GetName(),Damage);
+    // 暴击/可吸血开关与伤害同一授权生命周期：此处记录，仅本刻执行器经ConsumeAuthorization消费。
+    AuthorizedContext=Context.Get(); AuthorizedTarget=TargetASC; AuthorizedDamage=Damage;
+    AuthorizedCritical=bCritical; AuthorizedLifesteal=bLifesteal; bAuthorizationAvailable=true;
+    ON_SCOPE_EXIT { AuthorizedContext=nullptr; AuthorizedTarget.Reset(); AuthorizedDamage=0; AuthorizedCritical=false; AuthorizedLifesteal=false; bAuthorizationAvailable=false; };
+    UE_LOG(LogTemp,Display,TEXT("Y01DamageNext HIT Execution=%llu Beat=%llu Target=%s Base=%g Crit=%d Steal=%d"),Execution,Beat,*Target->GetName(),Damage,bCritical?1:0,bLifesteal?1:0);
     ASC->ApplyGameplayEffectSpecToTarget(*Spec.Data,TargetASC);
 }
 bool UY01DamageEffectsComponent::ConsumeAuthorization(const FGameplayEffectSpec& Spec,const UY01CombatAbilitySystem* Source,
-    const UY01CombatAbilitySystem* Target,float& Damage)
+    const UY01CombatAbilitySystem* Target,float& Damage,bool& bCritical,bool& bLifesteal)
 {
     if (!bAuthorizationAvailable || !bUpdating || !Spec.Def || Spec.Def->GetClass() != UY01TemplateDamageEffect::StaticClass()
         || Spec.GetContext().Get()!=AuthorizedContext || !CanRun(ActiveHandle)
         || Source!=Player()->GetCombatASC() || !Target || Target!=AuthorizedTarget.Get() || !Source->IsLegalCombatTarget(Target->GetAvatarActor())) { return false; }
-    bAuthorizationAvailable=false; Damage=AuthorizedDamage; return true;
+    bAuthorizationAvailable=false; Damage=AuthorizedDamage; bCritical=AuthorizedCritical; bLifesteal=AuthorizedLifesteal; return true;
 }
 void UY01DamageEffectsComponent::EndPlay(const EEndPlayReason::Type Reason)
 {

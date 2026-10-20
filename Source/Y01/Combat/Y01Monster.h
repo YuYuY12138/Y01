@@ -56,6 +56,7 @@ public:
 private:
     friend class UY01AttributeSet;
     void RecordHealthBarHealthChange(bool bActualDamage, bool bDied);
+    void ApplyCorpseState();
     void EnsurePresentationWorld();
     void PublishPresentation();
     bool IsMovementPeerEligible() const;

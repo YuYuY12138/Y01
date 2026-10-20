@@ -2,10 +2,16 @@
 #include "Playground/Y01PlaygroundController.h"
 #include "Playground/Y01TestSkill.h"
 #include "Player/Y01PlayerState.h"
+#include "Player/Y01AttributeResolver.h"
+#include "Player/Y01SourceEffectsComponent.h"
 #include "Combat/Y01Monster.h"
 #include "Combat/Y01Core.h"
 #include "Match/Y01KillRewards.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "GameFramework/PlayerStart.h"
+#include "EngineUtils.h"
+#include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameplayEffectExtension.h"
 #include "Engine/World.h"
@@ -31,6 +37,40 @@ AY01TrainingRoomGeometry::AY01TrainingRoomGeometry()
 UY01TrainingRooms::UY01TrainingRooms() { PrimaryComponentTick.bCanEverTick = false; }
 FVector UY01TrainingRooms::Center(const FY01TrainingSession& Session) const
 { return FVector(12000 + Session.View.Room * 4000, 0, 0); }
+FVector UY01TrainingRooms::BaseReturnLocation(const ACharacter* Pawn, const FVector& Fallback) const
+{
+    const auto* Mode = Cast<AY01PlaygroundGameMode>(GetOwner());
+    const AY01Core* Core = Mode ? Mode->GetMatchCore() : nullptr;
+    const auto* Capsule = Pawn->GetCapsuleComponent();
+    const float Radius = Capsule->GetScaledCapsuleRadius(), Half = Capsule->GetScaledCapsuleHalfHeight();
+    FCollisionQueryParams Query(SCENE_QUERY_STAT(Y01TrainingReturn), false, Pawn);
+    const auto Standable = [&](const FVector& XY, FVector& Out)
+    {
+        FHitResult Hit;
+        if (!GetWorld()->LineTraceSingleByObjectType(Hit, XY + FVector(0, 0, 500), XY - FVector(0, 0, 1500),
+                FCollisionObjectQueryParams(FCollisionObjectQueryParams::InitType::AllStaticObjects), Query)
+            || Hit.ImpactNormal.Z < Pawn->GetCharacterMovement()->GetWalkableFloorZ()) { return false; }
+        Out = Hit.ImpactPoint + FVector(0, 0, Half + 2);
+        return !GetWorld()->OverlapBlockingTestByProfile(Out, FQuat::Identity, Capsule->GetCollisionProfileName(),
+            FCollisionShape::MakeCapsule(Radius, Half), Query);
+    };
+    FVector Out;
+    if (IsValid(Core))
+    {
+        FBox Bounds(ForceInit);
+        TInlineComponentArray<UPrimitiveComponent*> Components; Core->GetComponents(Components);
+        for (const auto* Component : Components)
+        { if (Component->IsA<UCapsuleComponent>() || Component->IsA<UStaticMeshComponent>()) { Bounds += Component->Bounds.GetBox(); } }
+        // 俯视镜头偏航为0，画面“上方”即世界+X；沿该方向取首个可站立点，不落入核心占地。
+        const FVector Anchor = Core->GetActorLocation();
+        const double Start = (Bounds.IsValid ? Bounds.Max.X - Anchor.X : 0) + Radius + 8;
+        for (int32 Step = 0; Step < 8; ++Step)
+        { if (Standable(Anchor + FVector(Start + Step * 100, 0, 0), Out)) { return Out; } }
+    }
+    for (TActorIterator<APlayerStart> It(GetWorld()); It; ++It)
+    { if (Standable(It->GetActorLocation(), Out)) { return Out; } }
+    return Fallback;
+}
 const FY01TrainingStageRow* UY01TrainingRooms::StageFor(const FY01TrainingSession& Session) const
 {
     const auto* Mode = Cast<AY01PlaygroundGameMode>(GetOwner());
@@ -93,7 +133,14 @@ bool UY01TrainingRooms::Request(AY01PlaygroundController* PC, bool bEnter)
     Session.View.bInside = true; ++Session.View.Session; Session.View.EnteredAt = GetWorld()->GetTimeSeconds(); Session.View.Error.Reset();
     PC->SetDamageRegion(Session.View.Room);
     PC->SetHealthBarRegion(Session.View.Room, Session.View.Session);
-    Batch(Player, Session.View.Session);
+    const auto* First = StageFor(Session);
+    if (bImmediateFirstBatchForTest || !First) { Batch(Player, Session.View.Session); }
+    else
+    {
+        Session.View.NextBatchAt = GetWorld()->GetTimeSeconds() + First->SpawnInterval;
+        GetWorld()->GetTimerManager().SetTimer(Session.BatchTimer, FTimerDelegate::CreateUObject(this, &ThisClass::Batch,
+            TWeakObjectPtr<AY01PlayerState>(Player), Session.View.Session), First->SpawnInterval, false);
+    }
     UE_LOG(LogTemp, Display, TEXT("Y01Training ENTER Player=%s Room=%d Session=%d Alive=%d"), *Player->GetName(), Session.View.Room, Session.View.Session, Observe(Player).Alive);
     return true;
 }
@@ -141,7 +188,8 @@ void UY01TrainingRooms::Leave(AY01PlayerState* Player, FY01TrainingSession& Sess
         if (auto* Pawn = Cast<ACharacter>(Player->GetCombatASC()->GetAvatarActor()))
         {
             Pawn->GetCharacterMovement()->StopMovementImmediately();
-            if (bReturn) { Pawn->TeleportTo(Session.ReturnTransform.GetLocation(), Session.ReturnTransform.Rotator(), false, true); }
+            if (bReturn)
+            { Pawn->TeleportTo(BaseReturnLocation(Pawn, Session.ReturnTransform.GetLocation()), Pawn->GetActorRotation(), false, true); }
         }
         UE_LOG(LogTemp, Display, TEXT("Y01Training LEAVE Player=%s Kills=%d Gold=%d XP=%d"), *Player->GetName(), Session.View.Kills, Player->GetGold(), Player->GetExperience());
     }
@@ -223,7 +271,11 @@ void UY01TrainingRooms::OnHealth(TWeakObjectPtr<AY01PlayerState> Player, int32 S
     auto* Record = Session->Records.FindByPredicate([&](const auto& Item) { return Item.Monster == Monster; });
     if (!Record || Record->bSettled) { return; }
     Record->bSettled = true;
-    if (Player->TryAddMatchReward(Record->Reward.Gold, Record->Reward.Experience))
+    // R37第四期：练功房金币按归属者金币获取%折算后经小数钱包入账；经验保持整数原值。
+    FY01ResolvedAttributes Resolved; double Gain = 0;
+    if (Player->GetSourceEffects()->ObserveAttributes(Resolved).IsOk()) { Gain = Resolved.GoldGainPercent; }
+    if (Player->TryAddFractionalGold(Record->Reward.Gold * (1. + Gain))
+        && Player->TryAddMatchReward(0, Record->Reward.Experience))
     { ++Session->View.Kills; }
     else { Session->View.Error = TEXT("训练奖励溢出或非法，未发放"); }
 }

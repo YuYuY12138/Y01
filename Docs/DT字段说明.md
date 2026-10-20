@@ -23,7 +23,7 @@
 | 来源与成长 | [DT_SourceEffect][dt-sourceeffect] | 旧攻击／收入及装备直接属性、映射系数增量 |
 | 来源与成长 | [DT_AttributeMapping][dt-attributemapping] | 三维到六种派生属性的基础固定系数 |
 | 角色与战斗 | [DT_DamageEffect][dt-damageeffect] | 共用选敌、公式、飞行、持续与区域模板 |
-| 来源与成长 | [DT_GrowthRule][dt-growthrule] | 有效击杀成长 |
+| 来源与成长 | [DT_GrowthRule][dt-growthrule] | 成长规则（有效击杀／时间／普攻） |
 | 来源与成长 | [DT_Talent][dt-talent] | 天赋来源定义 |
 | 来源与成长 | [DT_TalentChoice][dt-talentchoice] | 固定三个候选、每局选一个 |
 | 商店与合成 | [DT_ShopOffer][dt-shopoffer] | 公开商品的价格及交付方式 |
@@ -66,7 +66,7 @@
 | [EffectIds[].Type][types] | 效果元素的目标表类型 | 必须 SourceEffect | 不能填属性名或 GrowthRule |
 | [EffectIds[].RowName][types] | 效果行身份 | 效果表真实行名；同一数组不重复 | 读取该行种类与幅度；行存在不代表来源已装备、已学或已选 |
 | [GrowthRuleIds[].Type][types] | 成长元素的目标表类型 | 必须 GrowthRule | 不是成长目标；玩家／装备实例目标在规则行内填写 |
-| [GrowthRuleIds[].RowName][types] | 成长规则行身份 | 成长规则表真实行名；同一数组不重复 | 非装备来源只能指向玩家力量规则 |
+| [GrowthRuleIds[].RowName][types] | 成长规则行身份 | 成长规则表真实行名；同一数组不重复 | 非装备来源只能指向玩家侧规则（力量／生命上限／敏捷／智慧） |
 
 装备和技能另有 [DamageEffectIds][types] 数组：每项 [Type][types]=DamageEffect、[RowName][types] 为真实伤害模板行，同数组不得重复；天赋及直接效果商品没有此字段。
 
@@ -113,7 +113,7 @@
 
 ## 2. [DT_Monster][dt-monster] — 怪物
 
-必须被波次或训练阶段的刷怪元素引用才会生成。主线和训练房均使用该表战斗属性；奖励要区分下列上下文。
+必须被波次或训练阶段的刷怪元素引用才会生成。主线和训练房均使用该表战斗属性；奖励要区分下列上下文。怪物死亡（生命≤0）后尸体立即关闭碰撞并约3秒后销毁；尸体不可再被选敌或攻击，掉落与金币/经验结算都在死亡瞬间完成，与销毁时机无关。
 
 | UE 字段名 | 中文含义 | 单位与合法范围 | 例／引用条件／当前作用 |
 |---|---|---|---|
@@ -132,7 +132,7 @@
 | [Skills[].Type][types] | 怪物技能元素的表类型 | 必须 Skill | 怪物初始化不支持带非空效果 ID 的技能；不要直接拿玩家来源技能当怪物技能 |
 | [Skills[].RowName][types] | 怪物技能元素行名 | 技能表真实行 | 初始化可加载所指 GA／GE；玩家成长规则没有怪物成长消费者，填了不会令怪物成长 |
 | [Experience][types] | 怪物单体经验字段 | 经验点；非负整数 | **当前未接入，改了无玩法效果**；主线经验来自清波奖励包，训练经验来自阶段奖励包 |
-| [Gold][types] | 怪物单体金币字段 | 金币；非负整数 | **当前未接入，改了无玩法效果**；不是逐怪全队金币、不是训练击杀金币 |
+| [Gold][types] | 怪物单体金币字段 | 金币；非负整数 | R37第四期起主线波次怪死亡时**在局全部玩家均分**：每人 Gold÷人数×(1+各自金币获取%)，小数经玩家钱包满1入账，击杀者无额外份，断线玩家不发不补；训练房怪物金币仍不覆盖训练包；不是逐怪全队金币、不是训练击杀金币 |
 | [DropReward][types] | 物品掉落包引用 | 必须 RewardPackage＋真实行名；掉率为 0 也须合法引用 | 条件生效：正掉率且有效击杀；必须为个人局内纯物品包，金币与经验均为 0，物品非空 |
 | [ItemDropChance][types] | 每次有效击杀触发整个物品包的概率 | double，0～1 | 例：0.25 表示 25%；0 不掉，1 必掉；不是各条目分别判率。主线和本人训练房有效击杀均可触发，物品归击杀者 |
 | [Mesh][types] | 怪物骨骼网格资源 | USkeletalMesh 软引用；可空 | **当前未接入，改了无玩法效果**；当前显示不用此模型字段 |
@@ -154,7 +154,7 @@
 | [Effect][types] | 直接 GE 授予兼容字段 | 当前公开技能必须为空 | 当前玩家来源走效果 ID／成长规则，不与此 GE 混填；不是技能命中伤害 GE 的选择器 |
 | [DamageEffectIds][types] | 学习后生效的伤害模板数组 | 可空；DamageEffect引用，禁止重复 | 主动仅Active；被动仅Periodic／Bound。与旧TestSkill攻击模式互斥；日常主动TrialFormulaBolt、被动TrialStackPoison |
 | [EffectIds][types] | 学习后常驻的效果引用数组 | 可空；SourceEffect引用，仅旧AttackFlat／GoldPerSecond；同数组不得重复 | 例：一个加攻击效果和一个每秒金币效果可以并存；移除技能时撤销静态来源 |
-| [GrowthRuleIds][types] | 学习期间生效的成长规则数组 | 可空；元素为 GrowthRule＋行名；不得重复 | **所有非装备来源只允许 Player＋Strength**；主动、被动都不能引用 EquipmentInstance 成长 |
+| [GrowthRuleIds][types] | 学习期间生效的成长规则数组 | 可空；元素为 GrowthRule＋行名；不得重复 | **所有非装备来源只允许 Player＋力量／生命上限／敏捷／智慧**；主动、被动都不能引用 EquipmentInstance 成长 |
 | [DisplayName][types] | 技能书与技能显示名 | 文本；公开内容去首尾空白后不得为空 | 已接入；不是行名，不决定伤害、品质或主动被动 |
 
 被动必须同时满足：[Ability][types] 为空、[Effect][types] 为空、[CooldownSeconds][types]=0、[TestSkill.Mode][types]=None。其余测试技能数值即使不消费也须有限非负；可清为默认或零。被动允许 [EffectIds][types]、[GrowthRuleIds][types] 均空；若仅填 [DamageEffectIds][types]，仍会启用对应周期／绑定伤害，但不提供静态属性或击杀成长。
@@ -172,6 +172,7 @@
 | [TestSkill.Speed][types] | 技能球飞行速度 | cm／秒；float，非负；Projectile 必须大于 0 | 仅 Projectile 消费；方向在释放时确定，不持续追踪目标 |
 | [TestSkill.Lifetime][types] | 技能球最长飞行时间 | 秒；float，非负；Projectile 必须大于 0 | 仅 Projectile 消费；例：速度 300、寿命 2，未受阻时约飞 600 cm |
 | [TestSkill.HitFeedbackSeconds][types] | 球命中后的反馈停留时间 | 秒；float，非负 | 仅 Projectile 消费；命中后不继续伤害或穿透，0 表示不额外停留；不是伤害间隔 |
+| [TestSkill.bLifesteal][types] | 测试技能伤害可否吸血 | bool；结构默认true | 仅旧Area／Projectile测试技能消费；true时该技能伤害走共享伤害管线，按攻击者吸血属性以实际生命损失回复；主动默认开，配false可关闭 |
 
 [技能消费者][testskill]的 Area／Projectile 按施法提交时攻击快照乘倍率，再减目标护甲；途中换装不追改已有攻击。没有伤害ID的主动None使用[即时单目标实现][combat]，不读取上述几何、时长与倍率，按当前攻击造成伤害并使用技能表冷却；有伤害ID时读取第24节模板；被动 None 不施法。测试球遇阻挡墙终止，区域不随角色移动。
 
@@ -186,8 +187,8 @@
 | [AttackBonus][types] | 直接攻击加值兼容字段 | 通用 float 非负；**当前实例装备必须为 0** | 加攻击可引用AttackFlat，或AttributeFlat→AttackDamage；不可同时填这里 |
 | [Effect][types] | 直接 GE 授予兼容字段 | **当前实例装备必须为空** | 不与实例来源混用；不能靠任意 GE 扩展当前装备属性 |
 | [DamageEffectIds][types] | 穿戴时启用的伤害模板 | DamageEffect引用；同数组不得重复；仅Periodic／Bound | 可只填本数组，不需伪AttackFlat；卸装停止新发动，独立产物按寿命保留，绑定区域立即清除 |
-| [EffectIds][types] | 穿戴时启用的效果数组 | SourceEffect引用，支持全部四种Kind；同数组不得重复 | 卸下撤销直接属性／系数／收入；与GrowthRuleIds、DamageEffectIds三者至少一个非空 |
-| [GrowthRuleIds][types] | 穿戴时生效的成长规则数组 | 元素为 GrowthRule＋行名；同数组不得重复 | 可用 EquipmentInstance＋AttackDamage 或 Player＋Strength；两者含义见成长规则表 |
+| [EffectIds][types] | 穿戴时启用的效果数组 | SourceEffect引用，支持全部五种Kind；同数组不得重复，条件限制见第5节 | 卸下撤销直接属性／系数／百分比／收入；与GrowthRuleIds、DamageEffectIds三者至少一个非空 |
+| [GrowthRuleIds][types] | 穿戴时生效的成长规则数组 | 元素为 GrowthRule＋行名；同数组不得重复 | 可用 EquipmentInstance＋AttackDamage 或 Player＋力量／生命上限／敏捷／智慧；含义见成长规则表 |
 | [DisplayName][types] | 装备显示名 | 文本；公开装备及实际掉落产物不得空白 | 已接入；相同名字不等于相同实例；合成不要求同名 |
 
 ## 5. [DT_SourceEffect][dt-sourceeffect] — 静态来源效果
@@ -196,30 +197,53 @@
 
 | UE 字段名 | 中文含义 | 单位与合法范围 | 例／引用条件／当前作用 |
 |---|---|---|---|
-| [Kind][types] | 效果种类 | AttackFlat／GoldPerSecond／AttributeFlat／MappingCoefficientAdd | 前两种旧来源效果；后两种仅装备支持，技能／天赋／直接效果商品拒绝 |
-| [Magnitude][types] | 旧效果幅度 | double，有限非负；新两种必须0 | AttackFlat为攻击点，GoldPerSecond为金币／秒；旧两种Amount必须0、SourceAttribute与TargetAttribute必须None |
+| [Kind][types] | 效果种类 | AttackFlat／GoldPerSecond／AttributeFlat／MappingCoefficientAdd／AttributePercent／CritChance／CritMultiplierAdd／Lifesteal／ShieldPeriodic／ShieldOnCast | 前两种旧来源效果；中间三种运行时限Equipment／Base，技能／天赋／直接效果商品不放宽旧白名单；R37二期起暴击、倍率、吸血、周期护盾四种仅限装备来源，施放护盾仅限技能来源 |
+| [Magnitude][types] | 旧效果幅度 | double，有限非负；后三种必须0 | AttackFlat为攻击点，GoldPerSecond为金币／秒；旧两种Amount必须0、SourceAttribute与TargetAttribute必须None |
 | [SourceAttribute][types] | 映射源属性 | MappingCoefficientAdd仅Strength／Agility／Wisdom；其他Kind必须None | 禁止从派生属性出发、禁止三维互转 |
-| [TargetAttribute][types] | 直接加值或映射目标 | AttributeFlat允许三维及六派生；MappingCoefficientAdd仅六派生；旧Kind必须None | 六派生为AttackDamage／MaxHealth／Armor／HealthRegen／GoldPerSecond／AttackRate |
-| [Amount][types] | 新效果幅度 | double，有限非负；旧Kind必须0 | AttributeFlat按TargetAttribute计：三维为属性点、AttackDamage为攻击点、MaxHealth为HP、Armor为减伤点、HealthRegen为HP／秒、GoldPerSecond为金币／秒、AttackRate为次数／秒；MappingCoefficientAdd为上述目标单位／源属性点的系数增量，不是百分比 |
+| [TargetAttribute][types] | 加值、映射或百分比目标 | AttributeFlat允许三维及六派生；MappingCoefficientAdd仅六派生；AttributePercent允许三维、五派生及GoldGain；旧Kind必须None | 六派生为AttackDamage／MaxHealth／Armor／HealthRegen／GoldPerSecond／AttackRate；百分比排除GoldPerSecond。GoldGain仅可用AttributePercent，不能固定加值或映射 |
+| [Amount][types] | 新效果幅度 | double，有限非负；旧Kind必须0 | Flat按目标单位；Mapping为目标单位／源属性点；Percent用百分点，20表示+20%，同属性相加而非连乘。三维为属性点、攻击为攻击点、生命为HP、护甲为减伤点、恢复为HP／秒、收入为金币／秒、频率为次数／秒。R37二期：CritChance与Lifesteal用百分点（20=20%，暴击率合计／100后封顶1，吸血合计／100不封顶），CritMultiplierAdd为倍率直加（0.5=暴击倍率+0.5），ShieldPeriodic与ShieldOnCast为每层护盾值（HP） |
+| [Condition][types] | 生命条件 | None／HealthBelow／HealthAbove，默认None | 非None仅可挂AttributeFlat／AttributePercent，目标限AttackDamage／Armor／HealthRegen／AttackRate／GoldGain；禁止三维、MaxHealth及映射条件 |
+| [ConditionThreshold][types] | 生命比例阈值 | double，有限0—100；None必须0 | 30表示30%。Below严格低于、Above严格高于，恰好等于均不生效；当前Health／MaxHealth，不计护盾，零上限比例约定0 |
+| [DurationSeconds][types] | 护盾层持续时长 | double，秒，有限非负；非护盾Kind必须0 | 仅ShieldPeriodic／ShieldOnCast消费；0为永久层。同源再触发在剩余值上累加至层上限并刷新到期时间 |
+| [LayerCap][types] | 护盾单层上限 | double，HP，有限非负；非护盾Kind必须0 | 仅ShieldPeriodic／ShieldOnCast消费；同来源剩余值累加不超过本层上限 |
+| [IntervalSeconds][types] | 周期护盾发放间隔 | double，秒，有限非负；仅ShieldPeriodic可正 | 仅ShieldPeriodic消费；装备生效首层立即获得，此后每满一个间隔按层数上限补发；ShieldOnCast必须0 |
 
-日常样例：[TrialStrength10][dt-sourceeffect]为AttributeFlat→Strength、Amount=10；[TrialStrengthHealth1][dt-sourceeffect]与[TrialStrengthHealth2][dt-sourceeffect]为力量→生命系数1和2。先合并直接属性与力量成长，再按最终三维乘相加后的系数；增加生命上限不回血，下降时钳当前HP。AttackRate基础为1／AttackInterval，加直接值和派生值后再取倒数得到间隔。
+R37第一期（百分比／生命条件）、第二期（暴击／倍率／吸血／护盾与左上血条）、第三期（时间／普攻成长与玩家侧四属性）与第四期（金币获取%消费）源码已接入，Editor构建与定向回归已通过。新增字段与Kind本批仅用内存DataTable测试，**未保存或添加正式DT样例**。原日常样例与其他窗口调值不改写；具体证据与未验边界见程序窗口续接记录。
+
+护盾规则：按来源分层，服务器唯一真源，客户端只复制总量。受伤先扣最快到期层，同源再触发在剩余值上累加至层上限并刷新持续时间，不同来源独立相加。死亡、复活初始化与离局清空；护盾不计入生命条件比例，不可被吸血回复。测试HUD左上在血条上沿半透明蓝条显示护盾总量，为0时隐藏。
+
+公式：有效三维＝（基础＋固定＋玩家成长）×（1＋三维百分比合计／100）；衍生小计＝基础＋固定＋装备成长＋Σ有效三维×合计系数；衍生最终＝小计×（1＋该属性百分比合计／100）。AttackFlat也进入攻击小计，所有自身攻击来源统一为一个派生加法GE；任意外部GE保留，但不纳入本来源百分比。GoldPerSecond只固定／映射；GoldGain明细Final为百分点，运行时归一化为比例；R37第四期起实际消费——自然收入速率、主线怪金币均分、清波奖励、练功房奖励各按 (1+金币获取%) 放大，小数经每玩家钱包满1入账（自然收入自带小数累计不用钱包）；属性明细仍显示基础速率与百分点，不显示乘算后值。失守结清等其他金币入口不乘。
+
+以下是可手工填写的字段示例，不代表已新增正式资产。示例行的 `Magnitude=0`、`SourceAttribute=None`；成长贡献标记仅由运行时生成，不是配表字段。护盾两种不放此表：ShieldPeriodic 例 Amount=30、DurationSeconds=2、LayerCap=60、IntervalSeconds=1（首层立即，之后每秒补至层上限60）；ShieldOnCast 例 Amount=25、DurationSeconds=5、LayerCap=25（已学主动技能每次施放触发）。
+
+| 示例 | Kind | TargetAttribute | Amount | Condition | ConditionThreshold |
+|---|---|---|---|---|---|
+| 力量＋20% | AttributePercent | Strength | 20 | None | 0 |
+| 低血攻击＋50% | AttributePercent | AttackDamage | 50 | HealthBelow | 30 |
+| 高血护甲＋10 | AttributeFlat | Armor | 10 | HealthAbove | 70 |
+| 金币获取＋20% | AttributePercent | GoldGain | 20 | None | 0 |
+| 暴击率＋20% | CritChance | None | 20 | None | 0 |
+| 暴击倍率＋0.5 | CritMultiplierAdd | None | 0.5 | None | 0 |
+| 吸血＋15% | Lifesteal | None | 15 | None | 0 |
+
+日常样例：[TrialStrength10][dt-sourceeffect]为AttributeFlat→Strength、Amount=10；[TrialStrengthHealth1][dt-sourceeffect]与[TrialStrengthHealth2][dt-sourceeffect]为力量→生命系数1和2。上限增加不回血；下降仅成功提交后钳当前HP，失败不扣血。暂存条件按候选上限及提交后会钳至的生命比例计算。AttackRate基础为1／AttackInterval，先加固定／派生及频率百分比再取倒数，不重置已经等待中的普攻截止时间。
 
 [来源运行时][sources]额外要求攻击幅度不超过 float 上限（约 \(3.402823\times10^{38}\)），正数转 float 后不能归零；攻击汇总及叠到实际当前攻击时不能溢出或完全吞掉正值。金币速率以 double 汇总，也不能溢出或完全吞掉正值；没有“允许负收入抵扣”的规则，余额入账仍受整数上限约束。
 
 [来源收入][income]从主流程进入准备阶段启动，期间合计基础速率和所有有效来源速率，累计小数后入账整数；结束或离场停止。卸装／移除技能撤销后续速率，但不扣回已经赚到的金币。基础速率不在这张表，调单个来源也不会替换基础速率。
 
-## 6. [DT_GrowthRule][dt-growthrule] — 有效击杀成长
+## 6. [DT_GrowthRule][dt-growthrule] — 成长规则（有效击杀／时间／普攻）
 
-只统计合法伤害造成、归属于本玩家的有效击杀；主线和本人训练房均可触发。一只怪的致死事件只消费一次，不按伤害段数、命中数或普攻发动计次，不按全队人数均分。
+R37第三期起支持三种触发。EffectiveKill 只统计合法伤害造成、归属于本玩家的有效击杀；主线和本人训练房均可触发。一只怪的致死事件只消费一次，不按伤害段数、命中数或普攻发动计次，不按全队人数均分。
 
 | UE 字段名 | 中文含义 | 单位与合法范围 | 例／引用条件／当前作用 |
 |---|---|---|---|
-| [Trigger][types] | 成长触发事件 | **仅 EffectiveKill** | 当前没有每秒成长、普攻发动成长等枚举选项 |
-| [Target][types] | 成长归属 | EquipmentInstance／Player | EquipmentInstance 只能被装备引用；Player 可被装备、技能、天赋及直接效果商品引用 |
-| [Attribute][types] | 增长属性 | EquipmentInstance 时仅 AttackDamage；Player 时仅 Strength | 不能组合成玩家攻击成长、装备力量成长，也不能改成敏捷／智慧 |
-| [Delta][types] | 每次有效击杀的增量 | 对应属性点／次；double，有限非负 | 例：0.5 表示每个有效击杀加 0.5；0 合法但不增加数值。应用时单次及累计须可表示为有限非负 float，正增量不能转成 0、溢出或被吞值 |
+| [Trigger][types] | 成长触发事件 | EffectiveKill／CombatTime／BasicAttack | EffectiveKill=每次有效击杀；CombatTime=主线战斗（Battle）阶段按秒累计，死亡等待与练功房不暂停、卸下装备暂停该件计时、局终停止；BasicAttack=每次普攻真正发动（近战判定或飞行物发射）计1次，不按命中人数，按约1秒批延迟结算；开局即结算，不要求 Battle（开波前、练功房普攻都算），仅局终停止 |
+| [Target][types] | 成长归属 | EquipmentInstance／Player | EquipmentInstance 只能被装备引用；Player 可被装备、技能、天赋及直接效果商品引用（玩家侧三触发器通用） |
+| [Attribute][types] | 增长属性 | EquipmentInstance 时仅 AttackDamage；Player 时 Strength／MaxHealth／Agility／Wisdom | 装备实例不支持其他属性，玩家侧不支持 AttackDamage；生命上限与敏捷智慧为 R37第三期新增，按用户确认口径开放 |
+| [Delta][types] | 每次触发增量 | 对应属性点；double，有限非负 | EffectiveKill=每击杀、CombatTime=每秒、BasicAttack=每次发动；例：CombatTime Delta=2 表示战斗阶段每秒+2。应用时单次及累计须可表示为有限非负 float，正增量不能转成 0、溢出或被吞值 |
 
-[成长消费者][growth]只计算致死时已生效的来源。装备实例攻击成长存回**那一件装备**：卸下保留累计但不继续增长，也不贡献攻击，重穿恢复；免费合成消耗材料后，产物是新实例，不继承材料累计。玩家力量成长直接累加在玩家：撤销来源不会扣回已长力量，但不再产生新增长；最终力量参与当前有效映射，可派生攻击或生命等已开放目标。
+[成长消费者][growth]按触发器分路结算：击杀批只带 EffectiveKill 规则，时间与普攻成长由约1秒的 Tick 批统一结算（时间成长只在 Battle 阶段计时；普攻成长局终前任何阶段都结算），两种批互不串触发器。装备实例攻击成长存回**那一件装备**：卸下保留累计但不继续增长（时间成长该件计时同时暂停），也不贡献攻击，重穿恢复；免费合成消耗材料后，产物是新实例，不继承材料累计。玩家侧成长直接累加在玩家账本：撤销来源不会扣回已得，但不再产生新增长；力量／敏捷／智慧进三维值，经既有映射派生攻击、生命等；生命上限成长进换算链上限小计（先于衍生百分比），**上限升当前生命同步加同差值（所有来源，含装卸装备；0血死亡态除外）、降按现有血量规则钳制**。明细面板中四项玩家成长均显示为"玩家成长"贡献行。
 
 ## 7. [DT_Talent][dt-talent] — 天赋
 
@@ -231,7 +255,7 @@
 | [Ability][types] | 直接 GA 授予兼容字段 | 当前公开候选必须为空 | 当前天赋只使用来源效果和玩家成长，不授予此类技能 |
 | [Effect][types] | 直接 GE 授予兼容字段 | 当前公开候选必须为空 | 不可和效果 ID 或成长规则混填 |
 | [EffectIds][types] | 选中后启用的效果数组 | SourceEffect引用，仅AttackFlat／GoldPerSecond；不得重复 | 可空，但与成长规则数组至少一项非空 |
-| [GrowthRuleIds][types] | 选中后生效的成长数组 | GrowthRule 引用；不得重复；只允许 Player＋Strength | 不支持装备实例成长；可与静态效果同时配置 |
+| [GrowthRuleIds][types] | 选中后生效的成长数组 | GrowthRule 引用；不得重复；只允许 Player＋力量／生命上限／敏捷／智慧 | 不支持装备实例成长；可与静态效果同时配置 |
 | [DisplayName][types] | 候选与已选天赋的显示名 | 文本；公开候选不得空白 | 已接入；不同候选须有不同真实行身份，不是靠不同显示名区分 |
 
 ## 8. [DT_TalentChoice][dt-talentchoice] — 三选一天赋
@@ -367,7 +391,7 @@
 |---|---|---|---|
 | [Domain][types] | 奖励归属域 | MatchPersonal／MetaPublic | 当前清波、训练、怪物物品掉落均用 MatchPersonal；MetaPublic 当前未接入，改了无玩法效果 |
 | [Experience][types] | 包含的经验 | 经验点；非负整数 | 清波按玩家、训练按击杀入账；物品掉落包必须 0。当前只累加经验，不执行升级 |
-| [Gold][types] | 包含的金币 | 金币；非负整数 | 清波按玩家、训练按击杀入账；物品掉落包必须 0；不是每秒金币速率 |
+| [Gold][types] | 包含的金币 | 金币；非负整数 | 清波逐人×(1+各自金币获取%)、训练按归属×(1+)入账，小数经玩家钱包满1取整；物品掉落包必须 0；不是每秒金币速率 |
 | [Items][types] | 物品奖励数组 | 通用允许空；当前清波／训练必须空，正概率怪物掉落必须非空 | 怪物掉落触发一次会展开**所有**项，不是在这些项之间抽一个 |
 | [Items[].Item][types] | 一项奖励物品或池引用 | MatchPersonal：Equipment／Skill／LocalItemPool；MetaPublic：MetaItem／MetaLootPool | 内含 Type／RowName；当前物品掉落只消费个人局内三种类型，不支持 QualityRollPool |
 | [Items[].Quantity][types] | 这一项交付次数 | 件或抽取次数；正整数 | 直接物品例：2 发两个实例；局内池例：2 独立抽两次。掉落包总数量及待交付容器须在整数可表示范围内 |
@@ -427,6 +451,8 @@
 | [Presentation.DamageColor][types] | 伤害飘字颜色 | FLinearColor；结构默认红 | 当前红，可在Presentation调整 |
 | [Presentation.HealingColor][types] | 治疗／回血飘字颜色 | FLinearColor；结构默认绿 | 当前绿，可在Presentation调整 |
 | [Presentation.RegenMergeSeconds][types] | 自然回血合并窗口 | 秒；double，结构默认1，有限且至少0.001 | 当前1；每目标独立汇总 |
+| [DefaultCritMultiplier][types] | 基础暴击倍率 | 倍；double，有限且大于0；结构默认2 | 暴击伤害=基础×(本值＋攻击方暴击倍率加成合计)，再走减甲、护盾与生命截断；配置在TryConfigureMatch真实路径读入GameMode，改后新配置对局生效 |
+| [Presentation.CriticalColor][types] | 暴击飘字颜色 | FLinearColor；结构默认橙金(1,0.45,0,1)，分量须有限 | 暴击伤害飘字用此色；未暴击走DamageColor，治疗走HealingColor——三色飘字已接入测试HUD |
 
 飘字口径：伤害显示“扣甲后、按目标剩余生命截断前”的结算量，实际扣血仍用于奖励与击杀归属；护甲后为0不显示。治疗显示有效恢复，满血不显示；自然回血按每目标 [Presentation.RegenMergeSeconds][types] 汇总。初始化、复活和生命上限调整不显示飘字。
 
@@ -503,10 +529,11 @@
 | [Speed][types] | 飞行速度 | double，cm／秒，有限非负且不超float上限；Projectile必须正 | 日常飞弹600 |
 | [Stacking][types] | 挂身DOT叠加方式 | Refresh／Independent | 仅AttachedDot可Independent；其他产物必须Refresh |
 | [MaxStacks][types] | DOT最大独立层数 | int32，1～256；Refresh必须1 | 日常叠毒3；区域独立性不通过此字段增加层数 |
+| [bLifesteal][types] | 该模板伤害可否吸血 | bool；结构默认false | Periodic／Bound保持false（DOT／区域不吸血）；主动技能可显式true。开启后按攻击方吸血属性、以目标实际生命损失结算回复，走绿色治疗飘字 |
 
 组合约束：Bound必须且只能配BoundArea，SelfCircle、Lifetime=0；日常绑定样例配FollowPlayer。两种区域禁止NearbyCount。主动技能必须使用原生DamageAbility、正CD、TestSkill.Mode=None；被动无GA且CD=0。旧TestSkill区域／球与新DamageEffectIds不能同时启用。
 
-生命周期：周期再穿重新等满周期；绑定穿即建、卸即失效。飞行释放时快照，DOT每跳取当前有效属性；卸装不保留装备加成，但已生成独立DOT／区域留至寿命结束。区域首次进入立即跳，重入不补首跳且保留节拍，不同区域独立，到期不再跳。死亡、切区、退出清理本人产物。治疗、护盾、通用百分比增益及真正重连仍未开放。
+生命周期：周期再穿重新等满周期；绑定穿即建、卸即失效。飞行释放时快照，DOT每跳取当前有效属性；卸装不保留装备加成，但已生成独立DOT／区域留至寿命结束。区域首次进入立即跳，重入不补首跳且保留节拍，不同区域独立，到期不再跳。死亡、切区、退出清理本人产物。R37来源属性百分比与[bLifesteal][types]已接入；本伤害模板没有通用百分比增益字段，治疗词条、护盾（走第5节来源效果）、真正重连及R37其余期未开放。
 
 [dt-attributemapping]: file:///G:/GarbageProject/Y01/Content/Y01Playground/Data/DT_AttributeMapping.uasset
 [dt-damageeffect]: file:///G:/GarbageProject/Y01/Content/Y01Playground/Data/DT_DamageEffect.uasset

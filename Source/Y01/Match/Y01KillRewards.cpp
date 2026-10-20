@@ -45,10 +45,12 @@ FGuid UY01KillRewards::FreezeDeath(const FY01KillAuthorization& A, float OldHeal
         || !FMath::IsFinite(OldHealth) || !FMath::IsFinite(NewHealth) || OldHealth <= 0 || NewHealth != 0
         || A.SourceSession != A.Source->GetCombatSession() || A.TargetSession != A.Target->GetCombatSession()
         || Sequence == MAX_uint64) { return {}; }
-    auto* Spawn = Spawns.Find(Cast<AY01Monster>(A.Target->GetAvatarActor()));
+    auto* Monster = Cast<AY01Monster>(A.Target->GetAvatarActor());
+    auto* Spawn = Spawns.Find(Monster);
     if (!Spawn || Spawn->bKilled || Spawn->Id != A.SpawnId) { return {}; }
     FY01KillEvent Event; Event.KillEventId = FGuid::NewGuid(); Event.MatchId = MatchId;
     Event.SpawnId = Spawn->Id; Event.Definition = Spawn->Definition; Event.Killer = A.Player;
+    Event.Monster = Monster;   // Cast失败时Spawn为空已提前return，此处必为有效怪物对象。
     Event.SourceSession = A.SourceSession; Event.TargetSession = A.TargetSession; Event.ActualDamage = OldHealth - NewHealth;
     Event.Origin = A.Target->GetAvatarActor()->GetActorLocation();
     Event.DeathTime = GetWorld()->GetGameState<AY01GameState>()->GetServerWorldTimeSeconds();

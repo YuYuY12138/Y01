@@ -133,7 +133,7 @@ FY01ItemResult UY01EconomyComponent::Initialize(const FGuid& Match, int32 Join, 
     {
         FY01DataValidation Errors; const auto* Found = Catalog.FindRow<FY01ShopOfferRow>(Ref, Errors);
         if (Ref.Type != K::ShopOffer || !Found || Published.Contains(Ref.RowName) || Found->Price < 0 || Found->Quantity <= 0
-            || static_cast<uint8>(Found->ShopKind) > static_cast<uint8>(EY01ShopKind::RandomTier)
+            || static_cast<uint8>(Found->ShopKind) > static_cast<uint8>(EY01ShopKind::DirectItem)
             || static_cast<uint8>(Found->Quality) > static_cast<uint8>(EY01Quality::Red))
         { return L->Fail(E::InvalidDefinition, TEXT("公开商品身份、价格、数量或种类无效")); }
         const auto Row = *Found; Published.Add(Ref.RowName, Row);
@@ -157,16 +157,22 @@ FY01ItemResult UY01EconomyComponent::Initialize(const FGuid& Match, int32 Join, 
                 { return L->Fail(E::InvalidDefinition, TEXT("直接效果引用、身份或数值无效")); }
                 if (Value->Kind == EY01SourceEffectKind::AttackFlat && (Value->Magnitude > MAX_flt || (Value->Magnitude > 0 && static_cast<float>(Value->Magnitude) == 0)))
                 { return L->Fail(E::Precision, TEXT("直接攻击无法表示为float")); }
-                Seen.Add(Effect.RowName); FY01ItemEffect Efx; Efx.EffectId = Effect.RowName; Efx.Kind = Value->Kind; Efx.Magnitude = Value->Magnitude; State.Effects.Add(Efx);
+                Seen.Add(Effect.RowName); FY01ItemEffect Efx; Efx.EffectId = Effect.RowName; Efx.Kind = Value->Kind; Efx.Magnitude = Value->Magnitude;
+                Efx.SourceAttribute = Value->SourceAttribute; Efx.TargetAttribute = Value->TargetAttribute; Efx.Amount = Value->Amount;
+                Efx.Condition = Value->Condition; Efx.ConditionThreshold = Value->ConditionThreshold;
+                Efx.DurationSeconds = Value->DurationSeconds; Efx.LayerCap = Value->LayerCap; Efx.IntervalSeconds = Value->IntervalSeconds;
+                State.Effects.Add(Efx);
             }
             Seen.Reset();
             for (const auto& Rule : Row.GrowthRuleIds)
             {
                 const auto* Value = Catalog.FindRow<FY01GrowthRuleRow>(Rule, Errors);
-                if (Rule.Type != K::GrowthRule || !Value || Seen.Contains(Rule.RowName) || Value->Trigger != EY01GrowthTrigger::EffectiveKill
-                    || Value->Target != EY01GrowthTarget::Player || Value->Attribute != EY01GrowthAttribute::Strength
+                if (Rule.Type != K::GrowthRule || !Value || Seen.Contains(Rule.RowName)
+                    || !(Value->Trigger == EY01GrowthTrigger::EffectiveKill || Value->Trigger == EY01GrowthTrigger::CombatTime
+                        || Value->Trigger == EY01GrowthTrigger::BasicAttack)
+                    || Value->Target != EY01GrowthTarget::Player || Value->Attribute == EY01GrowthAttribute::AttackDamage
                     || !FMath::IsFinite(Value->Delta) || Value->Delta < 0)
-                { return L->Fail(E::InvalidDefinition, TEXT("直接商品仅支持玩家力量成长规则")); }
+                { return L->Fail(E::InvalidDefinition, TEXT("直接商品仅支持玩家侧成长规则")); }
                 Seen.Add(Rule.RowName); FY01ItemGrowth G; G.RuleId = Rule.RowName; G.Trigger = Value->Trigger;
                 G.Target = Value->Target; G.Attribute = Value->Attribute; G.Delta = Value->Delta; State.Growth.Add(G);
             }
@@ -177,10 +183,21 @@ FY01ItemResult UY01EconomyComponent::Initialize(const FGuid& Match, int32 Join, 
         else
         {
             if (!Row.EffectIds.IsEmpty() || !Row.GrowthRuleIds.IsEmpty()) { return L->Fail(E::InvalidDefinition, TEXT("随机商品不能混入直接效果")); }
-            if (Row.ShopKind == EY01ShopKind::RandomPool)
+            if (Row.ShopKind == EY01ShopKind::DirectItem)
+            {
+                const auto* Item = CopyRow<FY01ConsumableRow>(Catalog, Row.Pool, Tables, Owners);
+                FY01ItemInstance Definition;
+                if (!Empty(Row.TierPool) || Row.Pool.Type != K::Consumable || !Item || Item->Quality != Row.Quality
+                    || !L->Resolve(Catalog, Row.Pool, Definition).IsOk())
+                { return L->Fail(E::InvalidDefinition, TEXT("DirectItem须引用品质一致的有效局内道具")); }
+                State.ItemType = K::Consumable; State.Odds.Add({Row.Quality, 1});
+            }
+            else if (Row.ShopKind == EY01ShopKind::RandomPool)
             {
                 if (!Empty(Row.TierPool)) { return L->Fail(E::InvalidDefinition, TEXT("RandomPool不能混入TierPool")); }
                 R = CopyPool(Row.Pool, K::None, Row.Quality); if (!R.IsOk()) { return R; }
+                const auto* Pool = Catalog.FindRow<FY01LocalItemPoolRow>(Row.Pool, Errors);
+                State.ItemType = Pool->ItemType; State.Odds.Add({Row.Quality, 1});
             }
             else
             {
@@ -194,7 +211,9 @@ FY01ItemResult UY01EconomyComponent::Initialize(const FGuid& Match, int32 Join, 
                 {
                     if (Seen.Contains(Entry.Quality)) { return L->Fail(E::InvalidDefinition, TEXT("品质池不允许重复品质")); }
                     Seen.Add(Entry.Quality); R = CopyPool(Entry.Pool, Tier->ItemType, Entry.Quality); if (!R.IsOk()) { return R; }
+                    if (Entry.Weight > 0) { State.Odds.Add({Entry.Quality, Entry.Weight}); }
                 }
+                State.ItemType = Tier->ItemType;
             }
         }
         States.Add(Ref.RowName, MoveTemp(State));
@@ -228,6 +247,12 @@ FY01ItemResult UY01EconomyComponent::Initialize(const FGuid& Match, int32 Join, 
             }
             FY01ItemInstance Definition; R = L->Resolve(Catalog, Entry.Item, Definition); if (!R.IsOk()) { return R; }
             if (Definition.DisplayName.IsEmpty()) { return L->Fail(E::InvalidDefinition, TEXT("掉落显示名为空")); }
+            if (Entry.Item.Type == K::Consumable)
+            {
+                if (!CopyRow<FY01ConsumableRow>(Catalog, Entry.Item, Tables, Owners))
+                { return L->Fail(E::InvalidDefinition, TEXT("掉落道具快照失败")); }
+                continue;
+            }
             TArray<FY01DataRef> Effects, Growth;
             if (Entry.Item.Type == K::Equipment)
             {
@@ -292,16 +317,21 @@ FY01ItemResult UY01EconomyComponent::Initialize(const FGuid& Match, int32 Join, 
                 if (Efx->Kind == EY01SourceEffectKind::AttackFlat && (Efx->Magnitude > MAX_flt || (Efx->Magnitude > 0 && static_cast<float>(Efx->Magnitude) == 0)))
                 { return L->Fail(E::Precision, TEXT("天赋攻击不能表示为float")); }
                 Seen.Add(RefEffect.RowName); FY01ItemEffect Value; Value.EffectId = RefEffect.RowName; Value.Kind = Efx->Kind; Value.Magnitude = Efx->Magnitude;
+                Value.SourceAttribute = Efx->SourceAttribute; Value.TargetAttribute = Efx->TargetAttribute; Value.Amount = Efx->Amount;
+                Value.Condition = Efx->Condition; Value.ConditionThreshold = Efx->ConditionThreshold;
+                Value.DurationSeconds = Efx->DurationSeconds; Value.LayerCap = Efx->LayerCap; Value.IntervalSeconds = Efx->IntervalSeconds;
                 Candidate.Effects.Add(Value);
             }
             Seen.Reset();
             for (const auto& RefGrowth : Row.GrowthRuleIds)
             {
                 const auto* Rule = Catalog.FindRow<FY01GrowthRuleRow>(RefGrowth, Errors);
-                if (RefGrowth.Type != K::GrowthRule || !Rule || Seen.Contains(RefGrowth.RowName) || Rule->Trigger != EY01GrowthTrigger::EffectiveKill
-                    || Rule->Target != EY01GrowthTarget::Player || Rule->Attribute != EY01GrowthAttribute::Strength
+                if (RefGrowth.Type != K::GrowthRule || !Rule || Seen.Contains(RefGrowth.RowName)
+                    || !(Rule->Trigger == EY01GrowthTrigger::EffectiveKill || Rule->Trigger == EY01GrowthTrigger::CombatTime
+                        || Rule->Trigger == EY01GrowthTrigger::BasicAttack)
+                    || Rule->Target != EY01GrowthTarget::Player || Rule->Attribute == EY01GrowthAttribute::AttackDamage
                     || !FMath::IsFinite(Rule->Delta) || Rule->Delta < 0)
-                { return L->Fail(E::InvalidDefinition, TEXT("天赋仅支持玩家力量成长快照")); }
+                { return L->Fail(E::InvalidDefinition, TEXT("天赋仅支持玩家侧成长快照")); }
                 Seen.Add(RefGrowth.RowName); FY01ItemGrowth Value; Value.RuleId = RefGrowth.RowName; Value.Trigger = Rule->Trigger;
                 Value.Target = Rule->Target; Value.Attribute = Rule->Attribute; Value.Delta = Rule->Delta; Candidate.Growth.Add(Value);
             }
@@ -383,7 +413,8 @@ FY01ItemResult UY01EconomyComponent::MutatePurchase(AController* Requester, cons
     {
         auto& State = NextStates.FindChecked(Request.Offer.RowName); State.bPurchased = true;
         FY01ResolvedSource Source; Source.Kind = EY01RuntimeSourceKind::Shop; Source.LocalKey = State.SourceKey;
-        for (const auto& Efx : State.Effects) { Source.Effects.Add({Efx.EffectId, Efx.Kind, Efx.Magnitude}); }
+        for (const auto& Efx : State.Effects) { Source.Effects.Add({Efx.EffectId, Efx.Kind, Efx.Magnitude, Efx.SourceAttribute, Efx.TargetAttribute, Efx.Amount,
+            Efx.Condition, Efx.ConditionThreshold, Efx.bGrowthContribution, Efx.DurationSeconds, Efx.LayerCap, Efx.IntervalSeconds}); }
         Additions.Add(MoveTemp(Source));
     }
     TArray<FY01ItemGrant> Grants; if (!Direct) { Grants.Reserve(Offer.Quantity); }
@@ -402,13 +433,18 @@ FY01ItemResult UY01EconomyComponent::MutatePurchase(AController* Requester, cons
                 Pool = Entry.Pool; if (Ticket < Entry.Weight) { break; } Ticket -= Entry.Weight;
             }
         }
-        if (!Catalog.SamplePool(Pool, Random, Grant.Definition, Errors))
+        if (Offer.ShopKind == EY01ShopKind::DirectItem) { Grant.Definition = Offer.Pool; }
+        else if (!Catalog.SamplePool(Pool, Random, Grant.Definition, Errors))
         { return L->Fail(E::InvalidDefinition, TEXT("服务器商品池抽样失败")); }
         Grant.ItemId = FGuid::NewGuid(); Grants.Add(MoveTemp(Grant));
     }
     UY01LoadoutComponent::FPreparedBatch Batch;
     R = L->PrepareBatch(Catalog, Grants, {}, Batch); if (!R.IsOk()) { return R; }
-    if (Grants.Num() == 1) { Batch.Result.ProductItemId = Grants[0].ItemId; }
+    if (Grants.Num() == 1)
+    {
+        const auto* Stack = Batch.Merged.Find(Grants[0].ItemId);
+        Batch.Result.ProductItemId = Stack ? *Stack : Grants[0].ItemId;
+    }
     if (Direct) { Batch.Result.Revision = L->Revision + 1; }
     return L->CommitBatch(Requester, &Request, MoveTemp(Batch), Additions, {}, Now, [&]
     {
@@ -487,7 +523,8 @@ FY01ItemResult UY01EconomyComponent::MutateChooseTalent(AController* Requester, 
     { return L->Fail(E::SourceFailure, TEXT("天赋来源已占用，不能用来源幂等冒充首次选择")); }
     auto NextState = TalentState; NextState.SelectedTalent = Candidate->TalentId;
     FY01ResolvedSource Source; Source.Kind = EY01RuntimeSourceKind::Talent; Source.LocalKey = NextState.SourceKey;
-    for (const auto& Effect : Candidate->Effects) { Source.Effects.Add({Effect.EffectId, Effect.Kind, Effect.Magnitude}); }
+    for (const auto& Effect : Candidate->Effects) { Source.Effects.Add({Effect.EffectId, Effect.Kind, Effect.Magnitude, Effect.SourceAttribute, Effect.TargetAttribute, Effect.Amount,
+        Effect.Condition, Effect.ConditionThreshold, Effect.bGrowthContribution, Effect.DurationSeconds, Effect.LayerCap, Effect.IntervalSeconds}); }
     UY01LoadoutComponent::FPreparedBatch Batch;
     R = L->PrepareBatch(SnapshotCatalog(), {}, {}, Batch); if (!R.IsOk()) { return R; }
     Batch.Result.Revision = L->Revision + 1; Batch.Result.TalentChoiceId = NextState.ChoiceId;

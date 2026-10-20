@@ -10,6 +10,10 @@
 #include "Components/HorizontalBox.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/ButtonSlot.h"
+#include "Components/ProgressBar.h"
+#include "Components/ScrollBox.h"
+#include "Components/UniformGridPanel.h"
+#include "Components/UniformGridSlot.h"
 #include "Playground/Y01R36Verification.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -31,6 +35,7 @@
 #include "Components/SceneComponent.h"
 #include "Player/Y01PlayerState.h"
 #include "Player/Y01LoadoutComponent.h"
+#include "Player/Y01AttributeResolver.h"
 #include "UObject/UnrealType.h"
 #include "Misc/ScopeExit.h"
 #include "Framework/Application/SlateApplication.h"
@@ -47,7 +52,6 @@
 #include "Widgets/SVirtualWindow.h"
 #include "Slate/WidgetRenderer.h"
 #include "Engine/TextureRenderTarget2D.h"
-#include "Components/ScrollBox.h"
 #include "ImageUtils.h"
 #include "TextureResource.h"
 #include "RenderingThread.h"
@@ -266,16 +270,17 @@ bool FY01R36CellWidthTest::RunTest(const FString&)
     F.View.Items[0].Display.Name = FText::FromString(TEXT("程序测试装备名称较长仍须完整换行")); F.Present();
     auto* Cell = CreateWidget<UY01R36Cell>(F.World); Cell->Configure(F.Panel.Get(), Z::Backpack, INDEX_NONE, F.View.Items[0].ItemId);
     auto* Label = Cast<UTextBlock>(Cell->WidgetTree->FindWidget(TEXT("Label")));
-    auto* Row = Label ? Cast<UHorizontalBox>(Label->GetParent()) : nullptr;
-    if (!TestNotNull(TEXT("真实原生条目文本容器"), Row)) { return true; }
-    auto Slate = Row->TakeWidget(); Slate->SlatePrepass(1.f);
+    auto* Frame = Cast<UBorder>(Cell->WidgetTree->RootWidget);
+    if (!TestNotNull(TEXT("真实方格文本"), Label) || !TestNotNull(TEXT("真实品质边框"), Frame)) { return true; }
+    TestTrue(TEXT("背包名称自动换行"), Label->GetAutoWrapText());
+    auto Slate = Frame->TakeWidget(); Slate->SlatePrepass(1.f);
     FArrangedChildren Children(EVisibility::Visible);
-    Slate->ArrangeChildren(FGeometry::MakeRoot(FVector2D(136, 94), FSlateLayoutTransform()), Children);
-    if (TestEqual(TEXT("图标和名称真实布局"), Children.Num(), 2))
+    Slate->ArrangeChildren(FGeometry::MakeRoot(FVector2D(88, 88), FSlateLayoutTransform()), Children);
+    if (TestEqual(TEXT("品质边框内只有填充层"), Children.Num(), 1))
     {
-        const auto& G = Children[1].Geometry;
-        TestTrue(TEXT("名称约束在格内剩余宽度，不能按未换行期望宽度横向溢出"), G.Position.X + G.GetLocalSize().X <= 136.01f);
-        TestTrue(TEXT("名称仍有可用宽度"), G.GetLocalSize().X >= 100.f);
+        const auto& G = Children[0].Geometry;
+        TestTrue(TEXT("名称区约束在88方格内"), G.Position.X + G.GetLocalSize().X <= 88.01f && G.Position.Y + G.GetLocalSize().Y <= 88.01f);
+        TestTrue(TEXT("名称区仍有可用宽度"), G.GetLocalSize().X >= 70.f);
     }
     return true;
 }
@@ -328,7 +333,7 @@ IMPLEMENT_COMPLEX_AUTOMATION_TEST(FY01R36EconomyWidgetTest, "Y01.Framework.R36.R
 void FY01R36EconomyWidgetTest::GetTests(TArray<FString>& Names, TArray<FString>& Commands) const
 {
     for (const TCHAR* N : {TEXT("ShopList"), TEXT("Purchased"), TEXT("NoFunds"), TEXT("TalentList"), TEXT("Chosen"),
-        TEXT("MaterialMode"), TEXT("FiveMaterials"), TEXT("Waiting"), TEXT("Ended"), TEXT("Dead"), TEXT("NoOwner"), TEXT("StableOrder")})
+        TEXT("NoMaterials"), TEXT("AutoCraft"), TEXT("Waiting"), TEXT("Ended"), TEXT("Dead"), TEXT("NoOwner"), TEXT("StableOrder"), TEXT("LuckyBoxes")})
     { Names.Add(N); Commands.Add(N); }
 }
 bool FY01R36EconomyWidgetTest::RunTest(const FString& Case)
@@ -353,16 +358,69 @@ bool FY01R36EconomyWidgetTest::RunTest(const FString& Case)
     if (Case == TEXT("Chosen")) { V.TalentChoice.SelectedTalent = V.TalentChoice.Candidates[1].TalentId; }
     if (Case == TEXT("NoFunds")) { V.Gold = 0; }
     if (Case == TEXT("Dead")) { V.Health = 0; }
+    if (Case == TEXT("NoMaterials")) { V.Items[4].Display.Quality = EY01Quality::Blue; }
+    if (Case == TEXT("LuckyBoxes"))
+    {
+        auto Extra = V.ShopOffers[0]; Extra.OfferId = TEXT("HiddenPill"); Extra.DisplayName = FText::FromString(TEXT("独立入口")); Extra.Price = 30;
+        Extra.ItemType = EY01TableKind::Equipment; Extra.Odds = {{EY01Quality::Red, 1}};
+        V.ShopOffers.Reset(); V.Gold = 10000;
+        const int32 Prices[] = {100, 300, 800, 1600};
+        for (int32 Book = 0; Book < 2; ++Book)
+        {
+            for (int32 G = 0; G < 4; ++G)
+            {
+                auto& O = V.ShopOffers.AddDefaulted_GetRef(); O.ShopKind = EY01ShopKind::RandomTier; O.Price = Prices[G];
+                O.OfferId = FName(*FString::Printf(TEXT("HiddenBox%d%d"), Book, G)); O.ItemType = Book ? EY01TableKind::Skill : EY01TableKind::Equipment;
+                O.DisplayName = FText::FromString(FString::Printf(TEXT("幸运箱%d%d"), Book, G));
+                O.Odds = {{static_cast<EY01Quality>(G), G == 3 ? 90. : 75.}, {static_cast<EY01Quality>(G + 1), G == 3 ? 10. : 25.}};
+            }
+        }
+        V.ShopOffers.Add(Extra);
+        Panel->Present(V, EY01MatchPhase::Preparing, 11);
+        auto* EquipmentGrid = Cast<UUniformGridPanel>(Panel->WidgetTree->FindWidget(TEXT("ShopEquipmentBoxes")));
+        auto* SkillGrid = Cast<UUniformGridPanel>(Panel->WidgetTree->FindWidget(TEXT("ShopSkillBoxes")));
+        auto* List = Cast<UScrollBox>(Panel->WidgetTree->FindWidget(TEXT("ShopList")));
+        if (!TestNotNull(TEXT("装备箱一排"), EquipmentGrid) || !TestNotNull(TEXT("技能箱一排"), SkillGrid) || !List) { return false; }
+        TestEqual(TEXT("装备箱四格"), EquipmentGrid->GetChildrenCount(), 4); TestEqual(TEXT("技能箱四格"), SkillGrid->GetChildrenCount(), 4);
+        TestTrue(TEXT("装备排在技能排之前"), List->GetChildIndex(EquipmentGrid) < List->GetChildIndex(SkillGrid));
+        for (int32 I = 0; I < 8; ++I)
+        {
+            auto* B = Cast<UButton>(Panel->WidgetTree->FindWidget(FName(*FString::Printf(TEXT("Purchase_%d"), I))));
+            if (!TestNotNull(TEXT("箱子按钮"), B)) { return false; }
+            auto* GridSlot = Cast<UUniformGridSlot>(B->GetParent()->Slot);
+            if (!TestNotNull(TEXT("箱子位于方格排"), GridSlot)) { return false; }
+            TestTrue(TEXT("箱子所在排"), B->GetParent()->GetParent() == static_cast<UWidget*>(I < 4 ? EquipmentGrid : SkillGrid));
+            TestEqual(TEXT("单排第0行"), GridSlot->GetRow(), 0); TestEqual(TEXT("按档位列"), GridSlot->GetColumn(), I % 4);
+            const FString Label = CastChecked<UTextBlock>(B->GetContent())->GetText().ToString();
+            TestTrue(TEXT("格内显示价格"), Label.Contains(FString::Printf(TEXT("%d金"), Prices[I % 4])));
+            TestTrue(TEXT("格内显示基础品质与类型"), Label.StartsWith(FString(TEXT("绿蓝紫金")).Mid(I % 4, 1)) && Label.Contains(I < 4 ? TEXT("装备") : TEXT("技能")));
+            TestTrue(TEXT("充足金币可购买"), B->GetIsEnabled());
+        }
+        const FString Tip = Cast<UButton>(Panel->WidgetTree->FindWidget(TEXT("Purchase_7")))->GetToolTipText().ToString();
+        TestTrue(TEXT("浮窗类型"), Tip.Contains(TEXT("技能书幸运箱"))); TestTrue(TEXT("浮窗价格"), Tip.Contains(TEXT("价格：1600 金币")));
+        TestTrue(TEXT("浮窗品质概率"), Tip.Contains(TEXT("可能品质：金 90%、红 10%")));
+        const FString Low = Cast<UButton>(Panel->WidgetTree->FindWidget(TEXT("Purchase_0")))->GetToolTipText().ToString();
+        TestTrue(TEXT("绿档概率"), Low.Contains(TEXT("可能品质：绿 75%、蓝 25%"))); TestTrue(TEXT("装备箱类型"), Low.Contains(TEXT("装备幸运箱")));
+        auto* Separate = Cast<UButton>(Panel->WidgetTree->FindWidget(TEXT("Purchase_8")));
+        if (!TestNotNull(TEXT("独立入口"), Separate)) { return false; }
+        TestTrue(TEXT("非幸运箱不占箱格，独立在列表"), Separate->GetParent()->GetParent() == static_cast<UWidget*>(List));
+        TestTrue(TEXT("独立入口显示名称"), CastChecked<UTextBlock>(Separate->GetContent())->GetText().ToString().Contains(TEXT("独立入口")));
+        // 视图改为无幸运箱时，箱格回列表且方格排收起，不残留旧位置。
+        for (auto& O : V.ShopOffers) { O.ShopKind = EY01ShopKind::RandomPool; }
+        ++V.ViewRevision; Panel->Present(V, EY01MatchPhase::Preparing, 11);
+        TestFalse(TEXT("无箱时装备排收起"), EquipmentGrid->IsVisible()); TestEqual(TEXT("箱格移回列表"), EquipmentGrid->GetChildrenCount(), 0);
+        return true;
+    }
     const auto Phase = Case == TEXT("Waiting") ? EY01MatchPhase::Waiting : Case == TEXT("Ended") ? EY01MatchPhase::Ended : EY01MatchPhase::Preparing;
     Panel->Present(V, Phase, 11);
     auto Button = [&](const TCHAR* Name) { auto* B = Cast<UButton>(Panel->WidgetTree->FindWidget(Name)); TestNotNull(TEXT("经济真实按钮"), B); return B; };
     auto* Buy = Button(TEXT("Purchase_0")); auto* Talent = Button(TEXT("Talent_0"));
-    auto* Mode = Button(TEXT("MaterialMode")); auto* Craft = Button(TEXT("Synthesize"));
-    if (!Buy || !Talent || !Mode || !Craft) { return true; }
+    auto* Craft = Button(TEXT("Synthesize"));
+    if (!Buy || !Talent || !Craft) { return true; }
     const bool Blocked = Case == TEXT("Waiting") || Case == TEXT("Ended") || Case == TEXT("Dead");
     TestEqual(TEXT("商品按钮按权威限购余额和阶段禁用"), Buy->GetIsEnabled(), !Blocked && Case != TEXT("Purchased") && Case != TEXT("NoFunds"));
     TestEqual(TEXT("天赋一次选择禁用"), Talent->GetIsEnabled(), !Blocked && Case != TEXT("Chosen"));
-    TestFalse(TEXT("未选择五件不能合成"), Craft->GetIsEnabled());
+    TestEqual(TEXT("合成按钮只按阶段禁用，选材由点击时自动决定"), Craft->GetIsEnabled(), !Blocked);
     const auto* BuyText = Cast<UTextBlock>(Buy->GetContent());
     if (TestNotNull(TEXT("购买显示名称与价格"), BuyText))
     {
@@ -389,22 +447,22 @@ bool FY01R36EconomyWidgetTest::RunTest(const FString& Case)
         TestFalse(TEXT("无owner不能发送或进入假等待"), Panel->GetModel().IsPending());
         TestEqual(TEXT("无owner不改金币"), Panel->GetModel().View().Gold, 200);
     }
-    if (Case == TEXT("MaterialMode") || Case == TEXT("FiveMaterials"))
+    if (Case == TEXT("NoMaterials") || Case == TEXT("AutoCraft"))
     {
-        TestTrue(TEXT("默认保留拖动"), Panel->CanDrag()); Mode->OnClicked.Broadcast();
-        TestFalse(TEXT("显式材料选择与拖动输入互斥"), Panel->CanDrag());
-        const FPointerEvent Mouse(0, FVector2D(20), FVector2D(20), TSet<FKey>{EKeys::LeftMouseButton}, EKeys::LeftMouseButton, 0, FModifierKeysState());
-        for (const auto& Item : V.Items)
+        TestTrue(TEXT("合成按钮不再切换选材模式，拖动始终保留"), Panel->CanDrag());
+        const FString Label = CastChecked<UTextBlock>(Craft->GetContent())->GetText().ToString();
+        TestEqual(TEXT("按钮只显示合成"), Label, FString(TEXT("合成"))); TestFalse(TEXT("不显示免费"), Label.Contains(TEXT("免费")));
+        TestTrue(TEXT("浮窗说明自动选材"), Craft->GetToolTipText().ToString().Contains(TEXT("五件")));
+        Craft->OnClicked.Broadcast();
+        TestFalse(TEXT("无owner不进入假等待"), Panel->GetModel().IsPending());
+        TestEqual(TEXT("无owner不提前耗材"), Panel->GetBackpack()->GetNumItems(), 5); TestTrue(TEXT("合成后仍可拖动"), Panel->CanDrag());
+        const auto& Log = Panel->GetModel().GameLog();
+        if (Case == TEXT("NoMaterials"))
         {
-            auto* Cell = CreateWidget<UY01R36Cell>(F.World); Cell->Configure(Panel, Z::Backpack, INDEX_NONE, Item.ItemId);
-            const auto CellSlate = Cell->TakeWidget();
-            TestTrue(TEXT("真实Cell左键选择材料"), Cell->NativeOnMouseButtonDown(FGeometry(), Mouse).IsEventHandled());
+            if (TestEqual(TEXT("无可合时写一条LOG"), Log.Num(), 1))
+            { TestEqual(TEXT("无可合文案"), Log.Last().ToString(), FString(TEXT("没有可以合成的"))); TestTrue(TEXT("失败灰色"), Log.Last().bFailure); }
         }
-        TestEqual(TEXT("五件真实选择身份"), Panel->GetModel().Materials().Num(), 5);
-        TestTrue(TEXT("五件后免费合成按钮可用"), Craft->GetIsEnabled());
-        TestTrue(TEXT("按钮明确免费"), CastChecked<UTextBlock>(Craft->GetContent())->GetText().ToString().Contains(TEXT("免费")));
-        Craft->OnClicked.Broadcast(); TestEqual(TEXT("无owner不提前耗材"), Panel->GetBackpack()->GetNumItems(), 5);
-        Mode->OnClicked.Broadcast(); TestTrue(TEXT("退出选择恢复真实拖动"), Panel->CanDrag());
+        else { TestEqual(TEXT("有可合时不写失败LOG且不乐观写成功"), Log.Num(), 0); }
     }
     return true;
 }
@@ -512,13 +570,7 @@ bool FY01R36FlightWidgetsTest::RunTest(const FString&)
     Layer->Present({});
     for (auto* W : Layer->GetAllChildren()) { TestEqual(TEXT("禁播清空可见图元"), W->GetVisibility(), ESlateVisibility::Collapsed); }
     TestEqual(TEXT("重复播及禁播不改变库存"), F.Panel->GetModel().View().Items.Num(), 3);
-    auto* Toggle = Cast<UButton>(F.Panel->WidgetTree->FindWidget(TEXT("ToggleFlights")));
-    if (TestNotNull(TEXT("只有本地表现开关"), Toggle))
-    {
-        Toggle->OnClicked.Broadcast();
-        TestTrue(TEXT("开关明确禁播状态"), CastChecked<UTextBlock>(Toggle->GetContent())->GetText().ToString().Contains(TEXT("关")));
-        TestFalse(TEXT("禁播不发交易RPC"), F.Panel->GetModel().IsPending());
-    }
+    TestNull(TEXT("品质飞行常开，不再提供禁播开关"), F.Panel->WidgetTree->FindWidget(TEXT("ToggleFlights")));
     return true;
 }
 namespace
@@ -607,7 +659,7 @@ IMPLEMENT_COMPLEX_AUTOMATION_TEST(FY01R36FlightPanelTest, "Y01.Framework.R36.Pre
     EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
 void FY01R36FlightPanelTest::GetTests(TArray<FString>& Names, TArray<FString>& Commands) const
 {
-    for (const TCHAR* N : {TEXT("Active"), TEXT("Repeat"), TEXT("Suppressed"), TEXT("Dead"), TEXT("Ended"),
+    for (const TCHAR* N : {TEXT("Active"), TEXT("Repeat"), TEXT("Dead"), TEXT("Ended"),
         TEXT("LostOwner"), TEXT("NoGameState"), TEXT("EmptyView"), TEXT("Arrival"), TEXT("HiddenPawn"),
         TEXT("NewSession"), TEXT("Clock"), TEXT("Busy"), TEXT("HostDPI")})
     { Names.Add(N); Commands.Add(N); }
@@ -665,7 +717,6 @@ bool FY01R36FlightPanelTest::RunTest(const FString& Case)
             TestTrue(TEXT("面板及飞行层DPI换算一致"), (CanvasSlot->GetPosition() + FVector2D(8)).Equals(Center,.01));
         }
     }
-    if (Case == TEXT("Suppressed")) { F.Panel->ToggleFlights(); }
     if (Case == TEXT("Dead")) { Committed->Health = 0; ++Committed->ViewRevision; }
     if (Case == TEXT("Ended")) { Snapshot->Phase = EY01MatchPhase::Ended; }
     if (Case == TEXT("LostOwner")) { PS->SetOwner(nullptr); }
@@ -688,7 +739,6 @@ bool FY01R36FlightPanelTest::RunTest(const FString& Case)
     TestEqual(TEXT("到期禁播死亡结束及失去可信输入清空旧图元，重复提交与忙不增生"), Visible(), StillVisible ? 5 : 0);
     TestEqual(TEXT("动画只显示权威物品，不由ETA或回调发奖"), F.Panel->GetModel().View().Items.Num(), Case == TEXT("Arrival") ? 1 : 0);
     TestFalse(TEXT("面板播放不构造领奖交易"), F.Panel->GetModel().IsPending());
-    if (Case == TEXT("Suppressed")) { F.Panel->ToggleFlights(); Tick(); TestEqual(TEXT("本地恢复只重播表现"), Visible(), 5); }
     return true;
 }
 IMPLEMENT_COMPLEX_AUTOMATION_TEST(FY01R36TooltipTest, "Y01.Framework.R36.Presentation.Tooltip",
@@ -742,12 +792,12 @@ bool FY01R36PanelToggleTest::RunTest(const FString& Case)
     auto* Details = P->WidgetTree->FindWidget(TEXT("BackpackPanel"));
     auto* Income = Cast<UTextBlock>(P->WidgetTree->FindWidget(TEXT("TopVitals")));
     if (!TestNotNull(TEXT("常驻背包开关"), Toggle) || !TestNotNull(TEXT("独立背包父容器"), Details)
-        || !TestNotNull(TEXT("常驻金币生命"), Income)) { return true; }
+        || !TestNotNull(TEXT("常驻金币文本"), Income)) { return true; }
     auto Click = [&]() { Toggle->OnClicked.Broadcast(); };
     auto Collapsed = [&]() { return Details->GetVisibility() == ESlateVisibility::Collapsed; };
     TestTrue(TEXT("背包默认Collapsed"), Collapsed());
     TestTrue(TEXT("开关和金币在面板外层"), Toggle->GetParent() == Income->GetParent() && Income->GetParent() != Details);
-    TestTrue(TEXT("金币生命加大"), Income->GetFont().Size >= 24);
+    TestTrue(TEXT("金币文本加大"), Income->GetFont().Size >= 20);
     TestTrue(TEXT("顶部显示金币不带每秒收入"), Income->GetText().ToString().Contains(TEXT("120")) && !Income->GetText().ToString().Contains(TEXT("金币/秒")));
     TestFalse(TEXT("人物和商店默认独立关闭"), P->IsCharacterExpanded() || P->IsShopExpanded());
     TestNull(TEXT("没有开始按钮"), P->WidgetTree->FindWidget(TEXT("Advance")));
@@ -768,18 +818,15 @@ bool FY01R36PanelToggleTest::RunTest(const FString& Case)
     auto* Bag = P->GetBackpack(); auto* First = Bag->GetItemAt(0); const auto SlateBag = Bag->TakeWidget();
     if (Case == TEXT("Retain"))
     {
-        P->MaterialMode(); TestTrue(TEXT("展开可选材料"), P->ToggleMaterial(V.Items[0].ItemId));
         Bag->SetScrollOffset(1); const auto Offset = Bag->GetScrollOffset(); Click();
         TestTrue(TEXT("再次点击收起"), Collapsed());
-        TestFalse(TEXT("隐藏不能变更选材"), P->ToggleMaterial(V.Items[1].ItemId));
+        TestFalse(TEXT("隐藏背包不能作为拖动源"), P->CanDragFrom(Z::Backpack));
         ++V.ViewRevision; V.Gold += 5; F.Present(); Click();
         TestFalse(TEXT("可再次展开"), Collapsed());
         TestEqual(TEXT("不重建虚拟列表"), P->GetBackpack(), Bag);
         TestTrue(TEXT("不重建Slate列表"), Bag->TakeWidget() == SlateBag);
         TestEqual(TEXT("同物品对象保留"), Bag->GetItemAt(0), First);
         TestEqual(TEXT("滚动位置保留"), Bag->GetScrollOffset(), Offset);
-        TestEqual(TEXT("选材身份保留"), P->GetModel().Materials().Num(), 1);
-        TestTrue(TEXT("选材模式保留"), P->IsSelectingMaterials());
         TestFalse(TEXT("显隐不发送交易"), P->GetModel().IsPending()); return true;
     }
     if (Case == TEXT("Dragging"))
@@ -854,11 +901,73 @@ void FY01HUD08ContractTest::GetTests(TArray<FString>& Names, TArray<FString>& Co
 {
     for (const TCHAR* N : {TEXT("Vitals"), TEXT("IndependentPanels"), TEXT("PermanentSlots"), TEXT("NoLegacyUI"),
         TEXT("AttributeRows"), TEXT("Countdown"), TEXT("FinalWave"), TEXT("Ended"), TEXT("UnknownCooldown"), TEXT("ConfirmationLayer"),
-        TEXT("Layout720"), TEXT("Layout1080"), TEXT("LayoutDPI"), TEXT("PurchaseLock"), TEXT("TalentLock"), TEXT("ObserverHeld"), TEXT("ObserverUnknown")})
+        TEXT("Layout720"), TEXT("Layout1080"), TEXT("LayoutDPI"), TEXT("PurchaseLock"), TEXT("TalentLock"), TEXT("ObserverHeld"), TEXT("ObserverUnknown"),
+        TEXT("DescribeConditions"), TEXT("BreakdownText"), TEXT("BreakdownTooltips"), TEXT("EffectConditions"), TEXT("GoldGain"), TEXT("GoldGainScroll")})
     { Names.Add(N); Commands.Add(N); }
 }
 bool FY01HUD08ContractTest::RunTest(const FString& Case)
 {
+    if (Case == TEXT("DescribeConditions"))
+    {
+        FY01SourceEffectRow E; E.Kind = EY01SourceEffectKind::AttributePercent;
+        E.TargetAttribute = EY01Attribute::AttackDamage; E.Amount = 20;
+        TestEqual(TEXT("无条件不追加后缀"), FY01AttributeResolver::Describe(E), FString(TEXT("攻击 +20%")));
+        E.Condition = EY01EffectCondition::HealthBelow; E.ConditionThreshold = 30;
+        TestEqual(TEXT("百分比与低生命条件"), FY01AttributeResolver::Describe(E), FString(TEXT("攻击 +20%（生命低于30%时）")));
+        E.Condition = EY01EffectCondition::HealthAbove;
+        TestEqual(TEXT("高生命条件使用相同后缀格式"), FY01AttributeResolver::Describe(E), FString(TEXT("攻击 +20%（生命高于30%时）")));
+        E.Kind = EY01SourceEffectKind::AttributeFlat; E.Amount = 7;
+        TestEqual(TEXT("固定值也保留条件"), FY01AttributeResolver::Describe(E), FString(TEXT("攻击 +7（生命高于30%时）")));
+        E.Condition = EY01EffectCondition::None; E.ConditionThreshold = 0;
+        TestEqual(TEXT("固定属性旧格式不变"), FY01AttributeResolver::Describe(E), FString(TEXT("攻击 +7")));
+        E.Kind = EY01SourceEffectKind::AttackFlat; E.Magnitude = 3;
+        TestEqual(TEXT("旧攻击效果格式不变"), FY01AttributeResolver::Describe(E), FString(TEXT("攻击 +3")));
+        E.Kind = EY01SourceEffectKind::GoldPerSecond; E.Magnitude = 2.75;
+        TestEqual(TEXT("旧收入格式不变"), FY01AttributeResolver::Describe(E), FString(TEXT("金币/秒 +2.75")));
+        E.Kind = EY01SourceEffectKind::MappingCoefficientAdd; E.SourceAttribute = EY01Attribute::Strength;
+        E.TargetAttribute = EY01Attribute::AttackRate; E.Amount = .5;
+        TestEqual(TEXT("旧系数格式和频率名称不变"), FY01AttributeResolver::Describe(E), FString(TEXT("每点力量 → 攻击次数/秒 系数 +0.5")));
+        E.Kind = EY01SourceEffectKind::AttributePercent; E.TargetAttribute = EY01Attribute::GoldGain; E.Amount = 20;
+        return TestEqual(TEXT("金币获取名称与百分点"), FY01AttributeResolver::Describe(E), FString(TEXT("金币获取 +20%")));
+    }
+    if (Case == TEXT("BreakdownText"))
+    {
+        FY01AttributeBreakdown B; B.Attribute = EY01Attribute::AttackDamage; B.Final = 72; B.Subtotal = 60; B.PercentTotal = 20;
+        auto Add = [&](EY01ContributionKind Kind, const TCHAR* Key, const TCHAR* Id, double Amount, double Contribution)
+            -> FY01AttributeContribution&
+        {
+            auto& E = B.Contributions.AddDefaulted_GetRef(); E.Kind = Kind; E.SourceKey = Key; E.EffectId = Id;
+            E.Amount = Amount; E.Contribution = Contribution; return E;
+        };
+        Add(EY01ContributionKind::Base, TEXT("基础"), TEXT("None"), 40, 40);
+        Add(EY01ContributionKind::Flat, TEXT("1/sword"), TEXT("FlatAttack"), 10, 10);
+        Add(EY01ContributionKind::Mapping, TEXT("0/mapping"), TEXT("StrengthAttack"), .5, 8).SourceAttribute = EY01Attribute::Strength;
+        Add(EY01ContributionKind::Growth, TEXT("1/sword"), TEXT("KillGrowth"), 2, 2);
+        auto& Active = Add(EY01ContributionKind::Percent, TEXT("3/foo"), TEXT("HighAttack"), 20, 20);
+        Active.Condition = EY01EffectCondition::HealthAbove; Active.ConditionThreshold = 50;
+        auto& Inactive = Add(EY01ContributionKind::Percent, TEXT("2/skill"), TEXT("LowAttack"), 15, 0);
+        Inactive.Condition = EY01EffectCondition::HealthBelow; Inactive.ConditionThreshold = 30; Inactive.bActive = false;
+        const auto T = FY01AttributeResolver::DescribeBreakdown(B);
+        TestTrue(TEXT("标题及三项汇总"), T.StartsWith(TEXT("攻击\n")) && T.Contains(TEXT("本来源结算值：72"))
+            && T.Contains(TEXT("百分比前小计：60")) && T.Contains(TEXT("百分比合计：20%")));
+        for (const auto* Token : {TEXT("基础"), TEXT("固定"), TEXT("百分比"), TEXT("系数"), TEXT("成长"), TEXT("装备/sword"),
+            TEXT("天赋/foo"), TEXT("技能/skill"), TEXT("FlatAttack"), TEXT("StrengthAttack"), TEXT("KillGrowth"), TEXT("HighAttack"), TEXT("LowAttack")})
+        { TestTrue(FString::Printf(TEXT("明细包含%s"), Token), T.Contains(Token)); }
+        TestTrue(TEXT("系数同时说明源属性、系数及实际贡献"), T.Contains(TEXT("力量 × 0.5 → +8")));
+        TestTrue(TEXT("百分比贡献是百分点，不伪称乘后攻击值"), T.Contains(TEXT("+20% → +20 百分点")) && T.Contains(TEXT("+15% → +0 百分点")));
+        TestTrue(TEXT("未生效来源也保留阈值"), T.Contains(TEXT("生命低于30%时")) && T.Contains(TEXT("未生效")));
+        TestTrue(TEXT("生效来源保留高生命阈值"), T.Contains(TEXT("生命高于50%时")) && T.Contains(TEXT("· 生效")));
+        B.Attribute = EY01Attribute::GoldGain; B.Final = 20; B.Subtotal = 0;
+        TestTrue(TEXT("金币获取最终20百分点显示20%"), FY01AttributeResolver::DescribeBreakdown(B).StartsWith(TEXT("金币获取\n本来源结算值：20%")));
+        const TCHAR* SourceNames[] = {TEXT("基础/foo"), TEXT("装备/foo"), TEXT("技能/foo"), TEXT("天赋/foo"), TEXT("商店/foo")};
+        for (int32 I = 0; I < UE_ARRAY_COUNT(SourceNames); ++I)
+        {
+            B.Contributions[0].SourceKey = FString::Printf(TEXT("%d/foo"), I);
+            TestTrue(TEXT("来源类别前缀可读且保留LocalKey"), FY01AttributeResolver::DescribeBreakdown(B).Contains(SourceNames[I]));
+        }
+        B.Contributions[0].SourceKey = TEXT("custom/foo");
+        return TestTrue(TEXT("非编码来源key原样保留"), FY01AttributeResolver::DescribeBreakdown(B).Contains(TEXT("custom/foo")));
+    }
     FWidgetWorld F(false); auto* P = F.Panel.Get(); auto& V = F.View;
     V.Gold = 317; V.Health = 250; V.Stats.Health = 300; V.IncomeRate = 2.75;
     V.Stats.AttackDamage = 73; V.Stats.Armor = 9; V.Stats.Agility = 12; V.Stats.Wisdom = 14;
@@ -876,6 +985,107 @@ bool FY01HUD08ContractTest::RunTest(const FString& Case)
         for (; W; W = W->GetParent()) { if (!W->IsVisible()) { return false; } }
         return true;
     };
+    if (Case == TEXT("EffectConditions"))
+    {
+        FY01ItemEffect E; E.Kind = EY01SourceEffectKind::AttributePercent; E.TargetAttribute = EY01Attribute::AttackDamage;
+        E.Amount = 20; E.Condition = EY01EffectCondition::HealthBelow; E.ConditionThreshold = 30;
+        V.Items[0].Location = EY01ItemLocation::EquipmentSlot; V.Items[0].Slot = 0;
+        V.Items[0].Effects.Add(E); V.EquipmentSlots[0] = V.Items[0].ItemId;
+        V.Skills[0].LearnedId = FGuid::NewGuid(); V.Skills[0].Effects.Add(E);
+        V.ShopOffers.AddDefaulted_GetRef().Effects.Add(E);
+        V.TalentChoice.Candidates.AddDefaulted_GetRef().Effects.Add(E); ++V.ViewRevision; F.Present();
+        const FString Expected = TEXT("攻击 +20%（生命低于30%时）");
+        TestTrue(TEXT("装备透传条件和阈值"), P->GetCell(Z::Equipment, 0)->GetToolTipText().ToString().Contains(Expected));
+        TestTrue(TEXT("技能透传条件和阈值"), P->GetCell(Z::Skill, 0)->GetToolTipText().ToString().Contains(Expected));
+        for (const auto* Name : {TEXT("Purchase_0"), TEXT("Talent_0")})
+        {
+            auto* W = Find(Name);
+            TestTrue(TEXT("商店天赋复用非测试专用描述入口"), W && W->GetToolTipText().ToString().Contains(Expected));
+        }
+        return true;
+    }
+    if (Case == TEXT("BreakdownTooltips") || Case == TEXT("GoldGain"))
+    {
+        auto* GoldValue = Cast<UTextBlock>(Find(TEXT("StatValue_GoldGain")));
+        auto* GoldRow = Cast<UBorder>(Find(TEXT("StatRow_GoldGain")));
+        if (!TestTrue(TEXT("金币获取真实标签、值及行存在"), GoldValue && GoldRow && Find(TEXT("StatLabel_GoldGain")))) { return false; }
+        TestEqual(TEXT("没有明细时默认0%"), GoldValue->GetText().ToString(), FString(TEXT("0%")));
+        TestEqual(TEXT("新标签为金币获取"), Text(TEXT("StatLabel_GoldGain")), FString(TEXT("金币获取")));
+        FY01UnitCombatStats Base = V.Stats; Base.AttackDamage = 60; Base.AttackInterval = .5f;
+        TArray<FY01SourceEffectSnapshot> Effects;
+        auto Add = [&](const TCHAR* Id, EY01Attribute Target, double Amount, EY01EffectCondition Condition, double Threshold)
+        {
+            auto& E = Effects.AddDefaulted_GetRef(); E.Source.Kind = EY01RuntimeSourceKind::Talent; E.Source.LocalKey = TEXT("foo");
+            E.EffectId = Id; E.Kind = EY01SourceEffectKind::AttributePercent; E.TargetAttribute = Target;
+            E.Amount = Amount; E.Condition = Condition; E.ConditionThreshold = Threshold;
+        };
+        Add(TEXT("AttackPercent"), EY01Attribute::AttackDamage, 20, EY01EffectCondition::None, 0);
+        Add(TEXT("LowAttack"), EY01Attribute::AttackDamage, 7, EY01EffectCondition::HealthBelow, 30);
+        Add(TEXT("GoldPercent"), EY01Attribute::GoldGain, 20, EY01EffectCondition::HealthAbove, 50);
+        auto Publish = [&](double Ratio)
+        {
+            FY01ResolvedAttributes R;
+            if (!TestTrue(TEXT("明细夹具解析成功"), FY01AttributeResolver::Resolve(Base, 0, Effects, R, Ratio).IsOk())) { return false; }
+            V.AttributeBreakdowns = R.Breakdowns; ++V.ViewRevision; F.Present(); return true;
+        };
+        V.Stats.AttackInterval = .75f;
+        if (!Publish(Case == TEXT("GoldGain") ? .4 : .8)) { return false; }
+        if (Case == TEXT("GoldGain"))
+        {
+            TestEqual(TEXT("inactive不把Amount误作Final"), GoldValue->GetText().ToString(), FString(TEXT("0%")));
+            TestTrue(TEXT("未生效条件仍显示来源与阈值"), GoldValue->GetToolTipText().ToString().Contains(TEXT("未生效"))
+                && GoldValue->GetToolTipText().ToString().Contains(TEXT("生命高于50%时")));
+            if (!Publish(.8)) { return false; }
+            TestEqual(TEXT("Final20百分点直接显示20%而非2000%"), GoldValue->GetText().ToString(), FString(TEXT("20%")));
+            TestTrue(TEXT("明细刷新为生效"), GoldValue->GetToolTipText().ToString().Contains(TEXT("· 生效"))
+                && !GoldValue->GetToolTipText().ToString().Contains(TEXT("未生效")));
+            if (!Publish(.4)) { return false; }
+            TestEqual(TEXT("条件退出恢复0%"), GoldValue->GetText().ToString(), FString(TEXT("0%")));
+            TestTrue(TEXT("后续inactive重新反映到Tooltip"), GoldValue->GetToolTipText().ToString().Contains(TEXT("未生效")));
+            TestEqual(TEXT("刷新复用原值控件"), Find(TEXT("StatValue_GoldGain")), static_cast<UWidget*>(GoldValue));
+        }
+        else
+        {
+            const TCHAR* Keys[] = {TEXT("Strength"), TEXT("Agility"), TEXT("Wisdom"), TEXT("AttackDamage"), TEXT("MaxHealth"),
+                TEXT("Armor"), TEXT("HealthRegen"), TEXT("IncomeRate"), TEXT("AttackInterval"), TEXT("GoldGain")};
+            TestEqual(TEXT("完整提交包含十行明细"), V.AttributeBreakdowns.Num(), static_cast<int32>(UE_ARRAY_COUNT(Keys)));
+            for (int32 I = 0; I < UE_ARRAY_COUNT(Keys); ++I)
+            {
+                if (FCString::Strcmp(Keys[I], TEXT("MaxHealth")) == 0) { TestNull(TEXT("生命上限行已移除"), Find(TEXT("StatRow_MaxHealth"))); continue; }
+                auto* Value = Find(*FString::Printf(TEXT("StatValue_%s"), Keys[I]));
+                auto* Row = Find(*FString::Printf(TEXT("StatRow_%s"), Keys[I]));
+                const auto Expected = FY01AttributeResolver::DescribeBreakdown(V.AttributeBreakdowns[I]);
+                TestTrue(TEXT("十行值均绑定正确属性而非数组错位"), Value && Value->GetToolTipText().ToString().Contains(Expected));
+                TestTrue(TEXT("行也提供可命中的明细提示"), Row && Row->GetToolTipText().ToString().Contains(Expected));
+            }
+            const auto Attack = Find(TEXT("StatValue_AttackDamage"))->GetToolTipText().ToString();
+            TestTrue(TEXT("攻击提示包含小计、总百分比和本来源值"), Attack.Contains(TEXT("百分比前小计：60"))
+                && Attack.Contains(TEXT("百分比合计：20%")) && Attack.Contains(TEXT("本来源结算值：72")));
+            TestTrue(TEXT("攻击未生效来源不丢失"), Attack.Contains(TEXT("LowAttack")) && Attack.Contains(TEXT("未生效")) && Attack.Contains(TEXT("生命低于30%时")));
+            const auto Rate = Find(TEXT("StatValue_AttackInterval"))->GetToolTipText().ToString();
+            TestTrue(TEXT("频率明细不冒充间隔秒数"), Rate.Contains(TEXT("攻击次数/秒")) && Rate.Contains(TEXT("攻击间隔（秒） = 1 / 攻击次数/秒")));
+            TestEqual(TEXT("间隔文本仍读实际Stats"), Text(TEXT("StatValue_AttackInterval")), FString(TEXT("0.75")));
+            const auto Before = Find(TEXT("StatValue_AttackDamage"))->TakeWidget()->GetToolTip(); F.Present();
+            TestTrue(TEXT("同一视图不重建明细提示"), Find(TEXT("StatValue_AttackDamage"))->TakeWidget()->GetToolTip() == Before);
+            // 明细删除一行也要清理旧提示，不能只处理空数组。
+            V.AttributeBreakdowns.RemoveAt(0); ++V.ViewRevision; F.Present();
+            TestTrue(TEXT("缺失明细清除旧值和行提示"), Find(TEXT("StatValue_Strength"))->GetToolTipText().IsEmpty()
+                && Find(TEXT("StatRow_Strength"))->GetToolTipText().IsEmpty());
+            TestTrue(TEXT("其它明细仍按Attribute绑定"), Find(TEXT("StatValue_AttackDamage"))->GetToolTipText().ToString().Contains(TEXT("本来源结算值：72")));
+        }
+        TestEqual(TEXT("实际攻击保留外部GE数值，不被来源结算72覆盖"), Text(TEXT("StatValue_AttackDamage")), FString(TEXT("73")));
+        TestEqual(TEXT("每秒收入仍保持2.75"), Text(TEXT("StatValue_IncomeRate")), FString(TEXT("2.75")));
+        TestEqual(TEXT("phase1观测不改变钱包"), P->GetModel().View().Gold, 317);
+        V.AttributeBreakdowns.Reset(); ++V.ViewRevision; F.Present();
+        TestEqual(TEXT("清空完整明细恢复GoldGain默认值"), GoldValue->GetText().ToString(), FString(TEXT("0%")));
+        for (const auto* Key : {TEXT("Strength"), TEXT("Agility"), TEXT("Wisdom"), TEXT("AttackDamage"),
+            TEXT("Armor"), TEXT("HealthRegen"), TEXT("IncomeRate"), TEXT("AttackInterval"), TEXT("GoldGain")})
+        {
+            TestTrue(TEXT("新空明细清除全部旧值及行Tooltip"), Find(*FString::Printf(TEXT("StatValue_%s"), Key))->GetToolTipText().IsEmpty()
+                && Find(*FString::Printf(TEXT("StatRow_%s"), Key))->GetToolTipText().IsEmpty());
+        }
+        return true;
+    }
     if (Case.StartsWith(TEXT("Observer")))
     {
         F.World->InitializeActorsForPlay(FURL());
@@ -916,19 +1126,36 @@ bool FY01HUD08ContractTest::RunTest(const FString& Case)
         TestEqual(TEXT("只有商店相关请求锁商店"), P->IsShopExpanded(), Case == TEXT("PurchaseLock"));
         TestTrue(TEXT("显隐不能取消pending"), P->GetModel().IsPending()); return true;
     }
-    if (Case.StartsWith(TEXT("Layout")))
+    if (Case.StartsWith(TEXT("Layout")) || Case == TEXT("GoldGainScroll"))
     {
         P->ToggleCharacter(); P->ToggleBackpack(); P->ToggleShop();
+        if (Case == TEXT("GoldGainScroll"))
+        {
+            auto& B = V.AttributeBreakdowns.AddDefaulted_GetRef(); B.Attribute = EY01Attribute::GoldGain; B.Final = 20; B.PercentTotal = 20;
+            ++V.ViewRevision; F.Present();
+            auto* List = Cast<UScrollBox>(Find(TEXT("AttributeList")));
+            if (!TestNotNull(TEXT("复用人物属性滚动区"), List)) { return false; }
+            TestEqual(TEXT("精简后十行，金币获取为末行"), List->GetChildrenCount(), 10);
+            auto* Last = Cast<USizeBox>(List->GetChildAt(9));
+            TestTrue(TEXT("末行使用现有横条结构"), Last && Last->GetContent() == Find(TEXT("StatRow_GoldGain")));
+            List->ScrollToEnd();
+        }
         const FVector2D Pixels = Case == TEXT("Layout1080") ? FVector2D(1920,1080) : FVector2D(1280,720);
         const float DPI = Case == TEXT("LayoutDPI") ? 1.5f : 1.f;
         const auto Host = FGeometry::MakeRoot(Pixels / DPI, FSlateLayoutTransform(DPI));
         auto Window = SNew(SWindow).ClientSize(Pixels); auto Slate = P->TakeWidget(); Window->SetContent(Slate);
         FHittestGrid Grid; Grid.SetHittestArea(FVector2D::ZeroVector, Pixels);
-        for (int32 I = 0; I < 4; ++I)
+        for (int32 I = 0; I < (Case == TEXT("GoldGainScroll") ? 12 : 4); ++I)
         {
             Slate->SlatePrepass(DPI); FSlateWindowElementList Elements(Window);
             FPaintArgs Args(&Window.Get(), Grid, FVector2D::ZeroVector, 20 + I * .016, .016f);
             Slate->Paint(Args, Host, FSlateRect(0,0,Pixels.X,Pixels.Y), Elements, 0, FWidgetStyle(), true);
+            if (Case == TEXT("GoldGainScroll"))
+            {
+                // 无应用帧循环的夹具也必须驱动真实ScrollBox Tick来消费ScrollToEnd。
+                auto* List = CastChecked<UScrollBox>(Find(TEXT("AttributeList")));
+                List->TakeWidget()->Tick(List->GetCachedGeometry(), 20 + I * .016, .016f);
+            }
         }
         auto Rect = [](UWidget* W) { return W->GetCachedGeometry().GetLayoutBoundingRect(); };
         auto Fits = [&](UWidget* W)
@@ -946,7 +1173,7 @@ bool FY01HUD08ContractTest::RunTest(const FString& Case)
             {
                 const auto R = Fits(P->GetCell(Zone, I));
                 for (const auto* Name : Parents) { TestTrue(TEXT("三面板同时展开不遮底槽"), Rect(Find(Name)).Bottom <= R.Top); }
-                TestTrue(TEXT("底槽采用减半后的实际布局高度"), FMath::IsNearlyEqual(R.Bottom - R.Top, 52.f * static_cast<float>(Pixels.X / 1280.), .1f));
+                TestTrue(TEXT("底槽采用方格实际布局高度"), FMath::IsNearlyEqual(R.Bottom - R.Top, 64.f * static_cast<float>(Pixels.X / 1280.), .1f));
             }
         }
         float Previous = -1;
@@ -955,15 +1182,43 @@ bool FY01HUD08ContractTest::RunTest(const FString& Case)
             const auto R = Fits(Find(Name)); TestTrue(TEXT("三个开关竖排错开"), R.Top > Previous); Previous = R.Bottom;
             for (const auto* Parent : Parents) { TestTrue(TEXT("开关与面板分列"), R.Left > Rect(Find(Parent)).Right); }
         }
-        Fits(Find(TEXT("TopVitals"))); Fits(Find(TEXT("WaveCountdown"))); return true;
+        Fits(Find(TEXT("TopVitals"))); Fits(Find(TEXT("HealthBar"))); Fits(Find(TEXT("WaveCountdown")));
+        // 夹具无玩家控制器→护盾总量为0→覆盖条按设计折叠（与Vitals用例同款行为断言），零几何不可测。
+        auto* ShieldBar = Find(TEXT("ShieldBar"));
+        TestTrue(TEXT("无护盾时覆盖条按设计折叠"), ShieldBar && ShieldBar->GetVisibility() == ESlateVisibility::Collapsed);
+        if (Case == TEXT("GoldGainScroll"))
+        {
+            const auto ListRect = Rect(Find(TEXT("AttributeList")));
+            for (const auto* Key : {TEXT("IncomeRate"), TEXT("GoldGain")})
+            {
+                auto* Row = Find(*FString::Printf(TEXT("StatRow_%s"), Key));
+                if (!TestNotNull(TEXT("末两行真实控件存在"), Row)) { continue; }
+                const auto R = Fits(Row);
+                TestTrue(TEXT("滚动后末两行完整进入原属性可见区域"), R.Left >= ListRect.Left - .1f && R.Top >= ListRect.Top - .1f
+                    && R.Right <= ListRect.Right + .1f && R.Bottom <= ListRect.Bottom + .1f);
+            }
+            TestEqual(TEXT("滚动不改变每秒收入"), Text(TEXT("StatValue_IncomeRate")), FString(TEXT("2.75")));
+            TestEqual(TEXT("滚入视野的金币获取显示20%"), Text(TEXT("StatValue_GoldGain")), FString(TEXT("20%")));
+        }
+        return true;
     }
     if (Case == TEXT("Vitals"))
     {
         const auto T = Text(TEXT("TopVitals"));
-        TestTrue(TEXT("左上真实金币与当前/最大生命"), T.Contains(TEXT("317")) && T.Contains(TEXT("250/300")));
+        // 金币走文本，生命改走血条比例；沿用同一夹具数据（金币317、生命250/300）推新预期值。
+        TestEqual(TEXT("左上真实金币文本"), T, FString(TEXT("金币 317")));
         TestFalse(TEXT("左上不显示每秒或其它属性"), T.Contains(TEXT("金币/秒")) || T.Contains(TEXT("攻击")));
+        auto* HealthBar = Cast<UProgressBar>(Find(TEXT("HealthBar")));
+        auto* ShieldBar = Cast<UProgressBar>(Find(TEXT("ShieldBar")));
+        if (!TestNotNull(TEXT("左上生命血条"), HealthBar) || !TestNotNull(TEXT("左上护盾覆盖条"), ShieldBar)) { return false; }
+        TestTrue(TEXT("血条按当前/最大生命比例"), FMath::IsNearlyEqual(HealthBar->GetPercent(), 250.f / 300.f));
+        // 夹具无玩家控制器，护盾总量读不到即为0：覆盖条必须隐藏且不显示残余比例。
+        TestTrue(TEXT("无护盾时覆盖条隐藏并归零"), ShieldBar->GetVisibility() == ESlateVisibility::Collapsed
+            && FMath::IsNearlyEqual(ShieldBar->GetPercent(), 0.f));
+        TestEqual(TEXT("血条上显示当前/最大"), Text(TEXT("HealthText")), FString(TEXT("250/300")));
         V.Health = 181; V.Stats.Health = 420; ++V.ViewRevision; F.Present();
-        TestTrue(TEXT("生命比值随完整视图变化，不写死"), Text(TEXT("TopVitals")).Contains(TEXT("181/420"))); return true;
+        TestEqual(TEXT("血量文字随完整视图变化"), Text(TEXT("HealthText")), FString(TEXT("181/420")));
+        TestTrue(TEXT("生命比值随完整视图变化，不写死"), FMath::IsNearlyEqual(HealthBar->GetPercent(), 181.f / 420.f)); return true;
     }
     if (Case == TEXT("IndependentPanels"))
     {
@@ -998,8 +1253,8 @@ bool FY01HUD08ContractTest::RunTest(const FString& Case)
                     ++Count;
                     auto* Slot = Cast<UCanvasPanelSlot>(Cell->Slot);
                     if (!TestNotNull(TEXT("底槽使用实际Canvas布局而非渲染缩放"), Slot)) { continue; }
-                    TestEqual(TEXT("十槽同一Y并按原分组单排排列"), Slot->GetPosition(), FVector2D(Equipment ? 16. + I * 108 : 668. + I * 148, 650));
-                    TestEqual(TEXT("槽宽高均为原来一半，底边距18"), Slot->GetSize(), FVector2D(Equipment ? 104 : 144, 52));
+                    TestEqual(TEXT("十槽同一Y并按原分组单排排列"), Slot->GetPosition(), FVector2D(Equipment ? 16. + I * 70 : 466. + I * 70, 648));
+                    TestEqual(TEXT("装备技能槽与背包同为品质方格"), Slot->GetSize(), FVector2D(64, 64));
                     TestEqual(TEXT("不以RenderTransform伪缩小"), Cell->GetRenderTransform().Scale, FVector2D(1,1));
                     TestTrue(TEXT("常驻槽在三面板之外"), Cell->GetParent() == Find(TEXT("HUDCanvas")));
                     TestTrue(TEXT("面板显隐不影响底槽交互"), Visible(Cell) && Cell->GetIsEnabled() && P->CanUseZone(Zone));
@@ -1007,8 +1262,8 @@ bool FY01HUD08ContractTest::RunTest(const FString& Case)
                     auto* Label = Cast<UTextBlock>(Cell->WidgetTree->FindWidget(TEXT("Label")));
                     if (!TestNotNull(TEXT("复用原标签"), Label)) { continue; }
                     TArray<FString> Lines; Label->GetText().ToString().ParseIntoArrayLines(Lines);
-                    TestEqual(TEXT("空槽及有内容槽均压为两行"), Lines.Num(), 2);
-                    TestTrue(TEXT("保持可读字号，不整体缩到7px"), Label->GetFont().Size >= 13);
+                    TestTrue(TEXT("方格内最多名称与CD两行"), Lines.Num() >= 1 && Lines.Num() <= 2);
+                    TestTrue(TEXT("方格保持可读字号"), Label->GetFont().Size >= 11);
                     TestEqual(TEXT("长名称由实际可用宽度省略"), Label->GetTextOverflowPolicy(), ETextOverflowPolicy::Ellipsis);
                 }
                 TestNull(TEXT("不增加额外槽位"), P->GetCell(Zone, Slots));
@@ -1020,7 +1275,9 @@ bool FY01HUD08ContractTest::RunTest(const FString& Case)
         auto* Equipment = P->GetCell(Z::Equipment, 0); auto* Active = P->GetCell(Z::Skill, 0);
         if (!Equipment || !Active) { return false; }
         TestTrue(TEXT("装备Tooltip保留未截断原文和品质"), Equipment->GetToolTipText().ToString().Contains(P->GetModel().ItemLabel(Item.ItemId)));
-        TestTrue(TEXT("技能Tooltip保留完整原文、类型品质和CD"), Active->GetToolTipText().ToString().Contains(P->GetModel().SkillLabel(0, 11)));
+        const FString SkillFull = P->GetModel().SkillLabel(0, 11); int32 CdLine = INDEX_NONE; SkillFull.FindLastChar(TEXT('\n'), CdLine);
+        TestTrue(TEXT("技能Tooltip保留完整原文与类型品质"), Active->GetToolTipText().ToString().Contains(SkillFull.Left(CdLine)));
+        TestFalse(TEXT("技能Tooltip不含实时CD，避免逐帧重建"), Active->GetToolTipText().ToString().Contains(TEXT("CD 7.0")));
         TestTrue(TEXT("主动CD在槽内独占第二行"), Texts(Active).EndsWith(TEXT("\nCD 7.0 秒")));
         P->Present(V, S.Phase, 17); TestTrue(TEXT("CD跟随同一权威时间而非本地起点"), Texts(Active).EndsWith(TEXT("\nCD 1.0 秒")));
         P->Present(V, S.Phase, -1); TestTrue(TEXT("未知时间仍在槽内显示待同步"), Texts(Active).EndsWith(TEXT("\nCD 待同步")));
@@ -1033,13 +1290,12 @@ bool FY01HUD08ContractTest::RunTest(const FString& Case)
         Reused->Configure(P, Z::Equipment, 0); Reused->Configure(P, Z::Backpack, INDEX_NONE, V.Items[1].ItemId);
         auto* Label = Cast<UTextBlock>(Reused->WidgetTree->FindWidget(TEXT("Label")));
         auto* Frame = Cast<UBorder>(Reused->WidgetTree->RootWidget);
-        auto* Row = Frame ? Cast<UHorizontalBox>(Frame->GetContent()) : nullptr;
-        auto* IconBox = Row ? Cast<USizeBox>(Row->GetChildAt(0)) : nullptr;
-        if (!TestTrue(TEXT("共享Cell保留原背包组件结构"), Label && Frame && IconBox)) { return false; }
-        TestTrue(TEXT("背包字号与边距不受紧凑样式污染"), Label->GetFont().Size == 15 && Frame->GetPadding() == FMargin(6));
-        TestTrue(TEXT("背包图标仍为24方形"), IconBox->GetWidthOverride() == 24 && IconBox->GetHeightOverride() == 24);
+        auto* Fill = Frame ? Cast<UBorder>(Frame->GetContent()) : nullptr;
+        if (!TestTrue(TEXT("共享Cell为品质边框方格结构"), Label && Frame && Fill && Fill->GetContent() == Label)) { return false; }
+        TestEqual(TEXT("背包字号不受紧凑样式污染"), static_cast<double>(Label->GetFont().Size), 13.);
         TestEqual(TEXT("背包不沿用省略策略"), Label->GetTextOverflowPolicy(), ETextOverflowPolicy::Clip);
-        TestEqual(TEXT("背包保留原完整文案"), Texts(Reused.Get()), P->GetModel().ItemLabel(V.Items[1].ItemId));
+        TestEqual(TEXT("背包格内只显示名称"), Texts(Reused.Get()), V.Items[1].Display.Name.ToString());
+        TestTrue(TEXT("背包浮窗保留完整文案"), Reused->GetToolTipText().ToString().Contains(P->GetModel().ItemLabel(V.Items[1].ItemId)));
         TestTrue(TEXT("常驻区域不受背包门禁"), P->CanDrag()); return true;
     }
     if (Case == TEXT("NoLegacyUI"))
@@ -1052,15 +1308,22 @@ bool FY01HUD08ContractTest::RunTest(const FString& Case)
     if (Case == TEXT("AttributeRows"))
     {
         Click(TEXT("ToggleCharacter"));
-        for (const auto* Key : {TEXT("Health"), TEXT("MaxHealth"), TEXT("AttackDamage"), TEXT("AttackInterval"), TEXT("AttackType"),
-            TEXT("Range"), TEXT("MeleeAngle"), TEXT("ProjectileSpeed"), TEXT("Armor"), TEXT("MoveSpeed"), TEXT("HealthRegen"),
-            TEXT("Strength"), TEXT("Agility"), TEXT("Wisdom"), TEXT("Experience"), TEXT("IncomeRate")})
+        for (const auto* Key : {TEXT("AttackDamage"), TEXT("AttackInterval"), TEXT("Range"), TEXT("Armor"), TEXT("HealthRegen"),
+            TEXT("Strength"), TEXT("Agility"), TEXT("Wisdom"), TEXT("IncomeRate")})
         {
             auto* Row = Cast<UBorder>(Find(*FString::Printf(TEXT("StatRow_%s"), Key)));
             TestNotNull(TEXT("每项属性独立背景横条"), Row);
             TestTrue(TEXT("每项有独立高对比标签与值"), Find(*FString::Printf(TEXT("StatLabel_%s"), Key)) && Find(*FString::Printf(TEXT("StatValue_%s"), Key)));
         }
-        TestEqual(TEXT("每秒收入归人物面板"), Text(TEXT("StatValue_IncomeRate")), FString(TEXT("2.75"))); return true;
+        for (const auto* Key : {TEXT("Health"), TEXT("MaxHealth"), TEXT("AttackType"), TEXT("MeleeAngle"), TEXT("ProjectileSpeed"),
+            TEXT("MoveSpeed"), TEXT("Experience")})
+        { TestNull(TEXT("已去掉的属性行不再创建"), Find(*FString::Printf(TEXT("StatRow_%s"), Key))); }
+        TestEqual(TEXT("每秒收入归人物面板"), Text(TEXT("StatValue_IncomeRate")), FString(TEXT("2.75")));
+        auto* List = Cast<UScrollBox>(Find(TEXT("AttributeList")));
+        if (TestNotNull(TEXT("原属性列表保留"), List)) { TestEqual(TEXT("精简后保留十行"), List->GetChildrenCount(), 10); }
+        TestNotNull(TEXT("末行GoldGain背景"), Find(TEXT("StatRow_GoldGain")));
+        TestEqual(TEXT("金币获取标签"), Text(TEXT("StatLabel_GoldGain")), FString(TEXT("金币获取")));
+        TestEqual(TEXT("旧视图无明细时显示0%"), Text(TEXT("StatValue_GoldGain")), FString(TEXT("0%"))); return true;
     }
     if (Case == TEXT("Countdown"))
     {
@@ -1130,14 +1393,14 @@ bool FY01HUD08FixTest::RunTest(const FString& Case)
     const auto Measure = FSlateApplication::Get().GetRenderer()->GetFontMeasureService();
     for (int32 Variant = 0; Variant < 2; ++Variant)
     {
-        if (Variant) { P->ToggleFlights(); P->MaterialMode(); }
+        if (Variant) { ++F.View.ViewRevision; F.View.Gold = 9999999; F.Present(); }
         for (int32 I = 0; I < 12; ++I)
         {
             Slate->SlatePrepass(DPI); FSlateWindowElementList Elements(Window);
             FPaintArgs Args(&Window.Get(), Grid, FVector2D::ZeroVector, 20 + I * .016, .016f);
             Slate->Paint(Args, Host, FSlateRect(0,0,Pixels.X,Pixels.Y), Elements, 0, FWidgetStyle(), true);
         }
-        for (const auto* Name : {TEXT("ToggleCharacter"), TEXT("ToggleBackpack"), TEXT("ToggleShop"), TEXT("ToggleFlights"), TEXT("Training"), TEXT("MaterialMode"), TEXT("Synthesize")})
+        for (const auto* Name : {TEXT("ToggleCharacter"), TEXT("ToggleBackpack"), TEXT("ToggleShop"), TEXT("Training"), TEXT("Synthesize")})
         {
             auto* B = Cast<UButton>(P->WidgetTree->FindWidget(Name));
             auto* T = B ? Cast<UTextBlock>(B->GetContent()) : nullptr;
@@ -1257,7 +1520,6 @@ bool FY01HUD08OffscreenTest::RunTest(const FString& Case)
         if (Variant == 1) { P->ToggleCharacter(); P->ToggleBackpack(); P->ToggleShop(); }
         if (Variant == 2)
         {
-            P->ToggleFlights(); P->MaterialMode();
             CastChecked<UScrollBox>(Find(TEXT("AttributeList")))->ScrollToEnd();
             CastChecked<UScrollBox>(Find(TEXT("ShopList")))->ScrollWidgetIntoView(Find(*LongName), false, EDescendantScrollDestination::Center);
             S.bAutomaticWaves = true; S.TotalWaves = 5; S.NextWaveIndex = 3; S.NextWaveDeadline = 25;
@@ -1288,7 +1550,7 @@ bool FY01HUD08OffscreenTest::RunTest(const FString& Case)
                 *Case, *State, *Name, T->GetFont().Size, Scale, Desired.X, Desired.Y, Allocated.X, Allocated.Y, Fits));
             TestTrue(Name + TEXT("同尺寸字体期望几何完全包含"), Fits);
         };
-        for (const auto* Name : {TEXT("ToggleCharacter"), TEXT("ToggleBackpack"), TEXT("ToggleShop"), TEXT("ToggleFlights"), TEXT("Training")})
+        for (const auto* Name : {TEXT("ToggleCharacter"), TEXT("ToggleBackpack"), TEXT("ToggleShop"), TEXT("Training")})
         { auto* B = CastChecked<UButton>(Find(Name)); CheckText(Name, Cast<UTextBlock>(B->GetContent()), B); }
         CheckText(TEXT("TopVitals"), Cast<UTextBlock>(Find(TEXT("TopVitals"))), Find(TEXT("TopVitals")));
         CheckText(TEXT("WaveCountdown"), Cast<UTextBlock>(Find(TEXT("WaveCountdown"))), Find(TEXT("WaveCountdown")));
@@ -1297,7 +1559,7 @@ bool FY01HUD08OffscreenTest::RunTest(const FString& Case)
             { auto* C = P->GetCell(Zone,I); CheckText(C->GetName(), Cast<UTextBlock>(C->WidgetTree->FindWidget(TEXT("Label"))), C); } }
         if (Variant)
         {
-            for (const auto* Name : {TEXT("MaterialMode"), TEXT("Synthesize")})
+            for (const auto* Name : {TEXT("Synthesize")})
             { auto* B = CastChecked<UButton>(Find(Name)); CheckText(Name, Cast<UTextBlock>(B->GetContent()), B); }
             const auto OfferName = Variant == 2 ? LongName : FString(TEXT("Purchase_0"));
             auto* B = CastChecked<UButton>(Find(*OfferName)); CheckText(OfferName, Cast<UTextBlock>(B->GetContent()), B);

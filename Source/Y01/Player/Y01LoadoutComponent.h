@@ -36,6 +36,8 @@ public:
     bool IsBusy() const { return Transactions.bBusy; }
     FY01ItemResult Observe(FY01LoadoutSnapshot& OutSnapshot) const;
     FY01ItemResult FindItem(const FGuid& ItemId, FY01ItemInstance& OutItem) const;
+    // 只读Id解析：持有物Id+来源种类→运行时来源Id；未持有返回空Id，供战斗侧桥接来源定位。
+    FY01RuntimeSourceId SourceId(const FGuid& ItemId, EY01RuntimeSourceKind Kind = EY01RuntimeSourceKind::Equipment) const;
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
     // 唯一UI读取入口；返回自有副本，不拼接旧Gold/ASC属性复制。
     bool ReadCommittedView(FY01CommittedView& Out) const;
@@ -59,6 +61,8 @@ private:
     {
         TMap<FGuid, FY01ItemInstance> Items;
         TArray<FGuid> Order;
+        // 叠加道具的预分配Id → 实际合并到的背包格Id。
+        TMap<FGuid, FGuid> Merged;
         FY01ItemResult Result;
         uint64 BeforeRevision = 0;
         uint64 AcquisitionSerial = 0;
@@ -96,6 +100,7 @@ private:
     void FinishActivation(FGameplayAbilitySpecHandle Handle);
     FY01ItemResult CheckSkillEntity(const FY01ItemRequest& Request) const;
     FY01ItemResult MutateSkill(AController* Requester, const FY01ItemRequest& Request);
+    FY01ItemResult MutateDevour(AController* Requester, const FY01ItemRequest& Request, double Now);
     FY01ItemResult ResolveAbility(const FY01ItemInstance& Book, TSubclassOf<UGameplayAbility>& OutClass) const;
     FY01ItemResult Fail(EY01ItemError Code, const TCHAR* Message) const;
     FY01ItemResult FromSource(const FY01RuntimeResult& Result) const;
@@ -106,7 +111,6 @@ private:
     FY01ItemResult Resolve(const FY01DataCatalog& Catalog, const FY01DataRef& Definition, FY01ItemInstance& Out) const;
     FY01ItemResult Execute(AController* Requester, const FY01ItemRequest& Request, EY01ItemOperation Operation);
     FY01ItemResult Mutate(AController* Requester, const FY01ItemRequest& Request, EY01ItemOperation Operation);
-    FY01RuntimeSourceId SourceId(const FGuid& ItemId, EY01RuntimeSourceKind Kind = EY01RuntimeSourceKind::Equipment) const;
     FY01ItemTransactions Transactions;
     TWeakObjectPtr<AY01PlayerState> Player;
     TWeakObjectPtr<AY01GameState> GameState;
@@ -118,6 +122,8 @@ private:
     TArray<FGuid> Order;
     TArray<FGuid> EquipmentSlots;
     UPROPERTY() TArray<FY01LearnedSkill> Skills;
+    // 本局已吞噬红装快照：按吞噬顺序，定义行名局内唯一；仅新局重新初始化时清空。
+    UPROPERTY() TArray<FY01ItemInstance> Devoured;
     // 每槽最多一张活跃票据，重发仍由64条原结果账本提供原票据。
     TArray<FY01ItemRequest> Tickets;
     uint64 AcquisitionSerial = 0;

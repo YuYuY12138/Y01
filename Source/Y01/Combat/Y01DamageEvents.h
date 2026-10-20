@@ -19,6 +19,8 @@ struct Y01_API FY01DamageEvent
     UPROPERTY() int32 RegionId = INDEX_NONE;
     UPROPERTY() float ActualDamage = 0;
     UPROPERTY() float DisplayAmount = 0;
+    // 暴击标记：飘字展示与后续表现消费；不参与金额校验。
+    UPROPERTY() bool bCritical = false;
     UPROPERTY() EY01DamageEventType Type = EY01DamageEventType::Damage;
     UPROPERTY() FVector WorldPosition = FVector::ZeroVector;
     bool HasValidAmount() const

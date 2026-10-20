@@ -144,7 +144,7 @@ void FY01CoreReviveBehaviorTest::GetTests(TArray<FString>& Names, TArray<FString
         TEXT("ResumeReentry"), TEXT("ResumeMax"), TEXT("DeathETA"), TEXT("Gates"), TEXT("FrozenEffects"), TEXT("EffectsCD"), TEXT("HUDSnapshot"),
         TEXT("FallenPersistence"), TEXT("AllDead"), TEXT("FrozenKill"), TEXT("FaultSettlement"),
         TEXT("TrainingMeleeDeath"), TEXT("TrainingMeleeDeathRemove"), TEXT("SafeCore"), TEXT("SafeCoreScaled"),
-        TEXT("ZeroPlanCore"), TEXT("ZeroPlanBlocked"), TEXT("SafeBlocked")})
+        TEXT("ZeroPlanCore"), TEXT("ZeroPlanBlocked"), TEXT("SafeBlocked"), TEXT("TrainingReturnAboveCore"), TEXT("DevouredEffects")})
     { Names.Add(Name); Commands.Add(Name); }
     for (const TCHAR* Name : {TEXT("CoreDamageAudience.Main"), TEXT("CoreDamageAudience.TrainingExcluded"),
         TEXT("CoreRegenAudience.Main"), TEXT("CoreRegenAudience.TrainingExcluded"), TEXT("ReviveNoDisplay")})
@@ -327,6 +327,54 @@ bool FY01CoreReviveBehaviorTest::RunTest(const FString& Case)
         TestEqual(TEXT("仍在死亡等待"), F.Health(), 0.f);
         TestTrue(TEXT("死亡不阻止原ETA交付"), F.Player->GetLoadout()->FindItem(Id, Item).IsOk()); return true;
     }
+    if (Case == TEXT("DevouredEffects"))
+    {
+        auto* L = F.Player->GetLoadout(); auto* A = F.Player->GetCombatASC();
+        FY01DamageEffectRow Bound; Bound.FixedDamage = 1; Bound.Trigger = EY01DamageTrigger::Bound;
+        Bound.Product = EY01DamageProduct::BoundArea; Bound.Targeting = EY01DamageTargeting::SelfCircle;
+        Bound.Position = EY01DamagePosition::FollowPlayer; Bound.TickSeconds = 1; Bound.Lifetime = 0; Bound.Radius = 200;
+        F.Data.Add(K::DamageEffect, Bound, TEXT("Bound"));
+        auto Free = Bound; Free.Trigger = EY01DamageTrigger::Periodic; Free.Product = EY01DamageProduct::IndependentArea;
+        Free.PeriodSeconds = 3; Free.Lifetime = 10; Free.Radius = 1000; F.Data.Add(K::DamageEffect, Free, TEXT("Free"));
+        auto& Gear = F.Data.Row<FY01EquipmentRow>(K::Equipment); Gear.Quality = EY01Quality::Red;
+        Gear.DamageEffectIds = {F.Data.Ref(K::DamageEffect,TEXT("Bound")),F.Data.Ref(K::DamageEffect,TEXT("Free"))};
+        FY01GrowthRuleRow Growth; Growth.Delta = 3; F.Data.Add(K::GrowthRule, Growth); Gear.GrowthRuleIds = {F.Data.Ref(K::GrowthRule)};
+        FY01ConsumableRow PillRow; PillRow.DisplayName = FText::FromString(TEXT("吞噬丹")); F.Data.Add(K::Consumable, PillRow, TEXT("Pill"));
+        const FGuid Id = FGuid::NewGuid(), Pill = FGuid::NewGuid();
+        TestTrue(TEXT("红装与丹药入包"), L->AddItems(FY01DataCatalog(F.Data.Tables), {{Id,F.Data.Ref(K::Equipment)}, {Pill,F.Data.Ref(K::Consumable,TEXT("Pill"))}}).IsOk());
+        TestTrue(TEXT("真实穿戴红装"), L->TryEquip(F.PC,F.Request(Id,EY01ItemOperation::Equip)).IsOk());
+        TestTrue(TEXT("吞噬前已有击杀成长"), F.Drop());
+        FY01ItemInstance Gearing; L->FindItem(Id, Gearing);
+        const uint64 Grown = Gearing.Growth.IsEmpty() ? 0 : Gearing.Growth[0].AppliedCount;
+        TestTrue(TEXT("吞噬前成长已累计"), Grown > 0);
+        const float Attack = A->GetNumericAttribute(UY01AttributeSet::GetAttackDamageAttribute());
+        auto R = F.Request(Pill, EY01ItemOperation::Devour);
+        R.ExpectedSlotItemId = Id; R.ExpectedSlotEntityRevision = Gearing.EntityRevision;
+        if (!TestTrue(TEXT("真实吞噬事务"), L->SubmitRequest(F.PC, R).IsOk())) { return false; }
+        F.Tick(.1);
+        FY01LoadoutSnapshot V; L->Observe(V);
+        if (!TestEqual(TEXT("已吞噬一件"), V.Devoured.Num(), 1)) { return false; }
+        TestFalse(TEXT("装备槽腾空"), V.EquipmentSlots[0].IsValid());
+        TestEqual(TEXT("属性来源保留"), A->GetNumericAttribute(UY01AttributeSet::GetAttackDamageAttribute()), Attack);
+        TestEqual(TEXT("已有成长保留"), V.Devoured[0].Growth[0].AppliedCount, Grown);
+        TestEqual(TEXT("绑定火圈改由吞噬来源持有"), F.Products(), 1);
+        AY01Monster* Next = nullptr;
+        for (AY01Monster* M : F.Mode->GetWaveMonsters())
+        { if (M && M->GetCombatASC()->GetNumericAttribute(UY01AttributeSet::GetHealthAttribute()) > 0) { Next = M; break; } }
+        if (!TestNotNull(TEXT("仍有存活波次怪"), Next)) { return false; }
+        F.Pawn->SetActorLocation(Next->GetActorLocation() + FVector(-150, 0, 0));
+        auto Spec = A->MakeOutgoingSpec(UY01DamageEffect::StaticClass(), 1, A->MakeEffectContext());
+        Spec.Data->SetSetByCallerMagnitude(Y01Tags::Data_Damage, 1000); A->ApplyGameplayEffectSpecToTarget(*Spec.Data, Next->GetCombatASC());
+        L->Observe(V); TestEqual(TEXT("吞噬后继续成长"), V.Devoured[0].Growth[0].AppliedCount, Grown + 1u);
+        const float Grew = A->GetNumericAttribute(UY01AttributeSet::GetAttackDamageAttribute());
+        F.Tick(3.1); TestTrue(TEXT("周期产物按吞噬来源发动"), F.Products() >= 2);
+        F.Die(); TestEqual(TEXT("死亡清全部产物"), F.Products(), 0); F.Tick(1.1);
+        L->Observe(V);
+        TestEqual(TEXT("死亡复活后已吞噬仍在"), V.Devoured.Num(), 1);
+        TestEqual(TEXT("死亡复活后成长不丢失"), V.Devoured[0].Growth[0].AppliedCount, Grown + 1u);
+        TestEqual(TEXT("死亡复活后属性不丢失"), A->GetNumericAttribute(UY01AttributeSet::GetAttackDamageAttribute()), Grew);
+        TestEqual(TEXT("复活立即恢复吞噬绑定火圈"), F.Products(), 1); return true;
+    }
     if (Case == TEXT("Gates") || Case == TEXT("FrozenEffects") || Case == TEXT("EffectsCD") || Case == TEXT("FallenPersistence"))
     {
         auto* L = F.Player->GetLoadout(); auto* A = F.Player->GetCombatASC();
@@ -429,9 +477,15 @@ bool FY01CoreReviveBehaviorTest::RunTest(const FString& Case)
         Panel->PresentCoreAlert(Hit);
         auto* ReviveSlot = Cast<UCanvasPanelSlot>(Countdown->Slot);
         auto* CoreSlot = Cast<UCanvasPanelSlot>(Panel->WidgetTree->FindWidget(TEXT("CoreAlert"))->Slot);
-        auto* VitalsSlot = Cast<UCanvasPanelSlot>(Panel->WidgetTree->FindWidget(TEXT("TopVitals"))->Slot);
-        TestTrue(TEXT("复活提示不覆盖核心提示和生命且不碰三面板"), ReviveSlot->GetPosition().X + ReviveSlot->GetSize().X <= CoreSlot->GetPosition().X
-            && ReviveSlot->GetPosition().Y >= VitalsSlot->GetPosition().Y + VitalsSlot->GetSize().Y
+        // 左上生命区现为金币文本+血条+护盾条三行；复活倒计时必须让位到三者之下，不重叠。
+        bool VitalsClear = true;
+        for (const auto* Name : {TEXT("TopVitals"), TEXT("HealthBar"), TEXT("ShieldBar")})
+        {
+            const auto* Slot = Cast<UCanvasPanelSlot>(Panel->WidgetTree->FindWidget(Name)->Slot);
+            VitalsClear = VitalsClear && ReviveSlot->GetPosition().Y >= Slot->GetPosition().Y + Slot->GetSize().Y;
+        }
+        TestTrue(TEXT("复活提示不覆盖核心提示和生命区且不碰三面板"), ReviveSlot->GetPosition().X + ReviveSlot->GetSize().X <= CoreSlot->GetPosition().X
+            && VitalsClear
             && ReviveSlot->GetPosition().Y + ReviveSlot->GetSize().Y <= 96);
         F.Fall(); Panel->PresentRevive(F.Player->GetRevive()->GetSnapshot());
         TestFalse(TEXT("失守取消复活倒计时"),Countdown->IsVisible());
@@ -511,6 +565,24 @@ bool FY01CoreReviveBehaviorTest::RunTest(const FString& Case)
                 > FMath::Square(double(Radius));
     };
     if (Case == TEXT("ZeroPlanCore")) { F.Pawn->SetActorLocation(F.Core->GetActorLocation()); }
+    if (Case == TEXT("TrainingReturnAboveCore"))
+    {
+        auto* Training = F.Mode->GetTraining();
+        if (!TestTrue(TEXT("进入练功房"), Training->Request(F.PC, true))) { return false; }
+        const int32 Room = Training->Observe(F.Player).Room;
+        TestTrue(TEXT("固定落在练功房中心"), FVector::Dist2D(F.Pawn->GetActorLocation(), FVector(12000 + Room * 4000, 0, 0)) < 1);
+        TestTrue(TEXT("返回"), Training->Request(F.PC, false)); F.Tick(.1);
+        const FVector At = F.Pawn->GetActorLocation(), CoreAt = F.Core->GetActorLocation();
+        TestTrue(TEXT("不回入房前位置"), FVector::Dist2D(At, FVector(-700, 0, 0)) > 100);
+        TestTrue(TEXT("落在大本营画面正上方(+X)"), At.X > CoreAt.X && FMath::Abs(At.Y - CoreAt.Y) < 1);
+        TestTrue(TEXT("贴近大本营而非远处"), At.X - CoreAt.X < 400);
+        TestTrue(TEXT("不重叠核心胶囊或外观"), OutsideCore());
+        const float Half = F.Pawn->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+        TestTrue(TEXT("站在地面而非悬空"), At.Z > Half - 5 && At.Z < Half + 10);
+        Training->Request(F.PC, true); Training->Request(F.PC, false); F.Tick(.1);
+        TestTrue(TEXT("每次返回同一固定点"), FVector::Dist(At, F.Pawn->GetActorLocation()) < 1);
+        return true;
+    }
     AStaticMeshActor* Blocker = nullptr;
     if (Case == TEXT("SafeBlocked") || Case == TEXT("ZeroPlanBlocked"))
     {

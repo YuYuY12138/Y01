@@ -1235,7 +1235,7 @@ class Runner:
         ui, before = self.interaction_state()
         start = source(ui)
         assert (ui.get('canDrag') or confirmation_open(ui) or
-                (target is None and ui.get('selectingMaterials') and start.get('enabled'))), '当前面板不允许操作'
+                (target is None and start.get('enabled'))), '当前面板不允许操作'
         _, other = self.interaction_state('B')
         begin = time.monotonic()
         self.pointer('A', start, target(ui) if target else None, button=button)
@@ -1330,16 +1330,11 @@ class Runner:
         return final
 
     def s3_toggle_flights(self, enabled):
+        # 品质飞行已常开且无开关按钮；关闭请求视为不可达场景。
+        assert enabled, '品质飞行常开，不能关闭'
         ui, before = self.interaction_state()
-        if ui['flightsEnabled'] is enabled: return
-        self.pointer('A', ui['ToggleFlights'])
-        def changed():
-            state = settled_ui(self.records(), 'A')
-            if not state or state[0]['time'] <= ui['time'] or state[0]['flightsEnabled'] is not enabled: return None
-            assert all(state[1][k] == before[k] for k in ('expectedSeq', 'response')), '视觉开关不能发送交易'
-            return state
-        _, after = self.wait(changed, '本地视觉开关，不发领奖RPC')
-        self.emit('S3_FLIGHTS_TOGGLE', enabled=enabled, before=before, after=after)
+        assert 'ToggleFlights' not in ui, '不应再出现品质飞行开关'
+        self.emit('S3_FLIGHTS_ALWAYS_ON', before=before)
 
     def s3_growth_node(self, label, item, duplicate, count, equipped):
         _, view = self.interaction_state(); _, other = self.interaction_state('B')
@@ -1401,8 +1396,6 @@ class Runner:
                 else:
                     # 正常后退避开下一靶，保留当前交付及镜头，不清怪或修改权威ETA。
                     for _ in range(4): self.move_key('A', 'S', .2)
-                    if mode == 'drop' and self.args.scenario == 'controlled':
-                        self.s3_toggle_flights(False); self.s3_toggle_flights(True)
                 result = self.wait(lambda: s3_delivery_evidence(self.records()), '权威0到1及A到货B0', seconds=15)
                 self.wait(lambda: (settled_ui(self.records(), 'A') or ({}, {}))[0].get('serverTime', 0) > pending['eta'] + 1,
                           '到货闪格后继续观测重复Publish', seconds=10)
@@ -1413,7 +1406,7 @@ class Runner:
                 self.emit('S3_NATURAL_NO_DROP', attempt=attempt)
                 assert self.args.scenario == 'natural', 'controlled掉率1却未判定交付'
                 continue
-            self.s3_toggle_flights(False); self.s3_toggle_flights(True)
+            self.s3_toggle_flights(True)
             ui, view = self.interaction_state()
             assert view['items'] == view['bag'] == 1
             assert not any(c.get('flashRemaining', 0) > 0 for c in ui.get('cells', [])), '旧物不能重闪'
@@ -1693,42 +1686,17 @@ class Runner:
         self.emit('DISABLED_CLICK_PASS', label=label, before=before, after=after, server_rejection=False, ui_rejection=True)
         self.snapshot(label)
 
-    def set_material_mode(self, enabled):
-        ui, before = self.interaction_state()
-        if ui.get('selectingMaterials') is enabled: return
-        self.pointer('A', ui['MaterialMode'])
-        def changed():
-            state = settled_ui(self.records(), 'A')
-            return state and state[0].get('time', 0) > ui['time'] and state[0].get('selectingMaterials') is enabled
-        self.wait(changed, '真实材料选择模式切换')
-
-    def select_material(self, item):
-        ui, before = self.interaction_state()
-        cell = choose_cell(ui, 0, item=item)
-        assert ui.get('selectingMaterials') and not cell.get('selected'), '只能选择未选中的包内材料'
-        self.pointer('A', cell)
-        def changed():
-            state = settled_ui(self.records(), 'A')
-            if not state or state[0].get('time', 0) <= ui['time']: return None
-            current, view = state
-            assert all(view[k] == before[k] for k in ('expectedSeq', 'items', 'bag')), '选材不能提前消耗或发请求'
-            return current.get('materials') == ui['materials'] + 1 and any(c.get('item') == item and c.get('selected') for c in current.get('cells', []))
-        self.wait(changed, '鼠标选择材料且未消费')
-        self.emit('MATERIAL_SELECTED', item=item)
-
     def craft_actions(self):
         for i in range(4): self.purchase(0, 'Natural-Material-' + str(i + 2))
-        self.set_material_mode(True)
         ui, _ = self.interaction_state()
         materials = [c for c in visible_bag_cells(ui) if c.get('type') == 7 and c.get('quality') == 0]
         assert len(materials) == 5, '五件自然购买同类同品质材料必须可见'
-        for cell in materials: self.select_material(cell['item'])
         def check(b, a):
             economy_delta(b, a, 0)
             return (a['items'] == b['items'] - 4 and a['bag'] == b['bag'] - 4 and a['productQuality'] == 1
                     and all(a[k] == b[k] for k in ('equipment', 'skills', 'attack', 'incomeRate')))
-        self.action('Natural-FreeCraft', lambda u: u['Synthesize'], check=check)
-        self.set_material_mode(False)
+        # 一键合成由客户端自动选最低可合品质的五件，不再手动选材。
+        self.action('Natural-AutoCraft', lambda u: u['Synthesize'], check=check)
 
     def full_slots_purchase(self):
         for slot in range(6):

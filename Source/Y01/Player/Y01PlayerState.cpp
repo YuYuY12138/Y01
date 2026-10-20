@@ -8,6 +8,7 @@
 #include "Player/Y01DamageEffectsComponent.h"
 #include "Player/Y01Character.h"
 #include "Player/Y01ReviveComponent.h"
+#include "Player/Y01ShieldComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Net/UnrealNetwork.h"
 #include "Match/Y01GameFlow.h"
@@ -26,6 +27,7 @@ AY01PlayerState::AY01PlayerState()
     DropDelivery = CreateDefaultSubobject<UY01DropDeliveryComponent>(TEXT("DropDelivery"));
     DamageEffects = CreateDefaultSubobject<UY01DamageEffectsComponent>(TEXT("DamageEffects"));
     Revive = CreateDefaultSubobject<UY01ReviveComponent>(TEXT("Revive"));
+    Shield = CreateDefaultSubobject<UY01ShieldComponent>(TEXT("Shield"));
     AbilitySystem->SetReplicationMode(EGameplayEffectReplicationMode::Mixed);
     EquipmentSlots.SetNum(Y01Data::EquipmentSlotCount);
     SkillSlots.SetNum(Y01Data::SkillSlotCount);
@@ -54,6 +56,9 @@ bool AY01PlayerState::TryInitializeCharacter(const FY01DataCatalog& Catalog, con
         { EquipmentSlots[Grant.Slot] = Grant.Source; }
     }
     SkillSlots = AbilitySystem->GetInitialSkills(); SkillSlots.SetNum(Y01Data::SkillSlotCount);
+    // 属性初始化成功后清空护盾层：初入局/重开均经此路径回到无盾状态；
+    // 对局内死亡清空见 Y01Combat 死亡分支（ResetLayers）；复活后护盾保持空，由周期护盾来源按周期重新获得。
+    Shield->ResetLayers();
     if (auto* Avatar = Cast<AY01Character>(GetPawn())) { Avatar->RefreshAbilityActorInfo(); }
     ForceNetUpdate();
     return true;
@@ -90,5 +95,17 @@ bool AY01PlayerState::TryAddMatchReward(int32 GoldDelta, int32 ExperienceDelta)
     if (!CanAddMatchReward(GoldDelta, ExperienceDelta)) { return false; }
     Gold += GoldDelta; Experience += ExperienceDelta;
     ForceNetUpdate();
+    return true;
+}
+bool AY01PlayerState::TryAddFractionalGold(double Amount)
+{
+    if (!HasAuthority() || !FMath::IsFinite(Amount) || Amount < 0) { return false; }
+    const double Next = RewardRemainder + Amount;
+    if (!FMath::IsFinite(Next) || Next < 0 || (Amount > 0 && Next == RewardRemainder)) { return false; }
+    if (Next < 1.) { RewardRemainder = Next; return true; }
+    const double Whole = FMath::FloorToDouble(Next);
+    if (Whole >= 2147483648.0 || static_cast<int64>(Whole) > static_cast<int64>(MAX_int32) - Gold) { return false; }
+    if (!TryAddMatchReward(static_cast<int32>(Whole), 0)) { return false; }
+    RewardRemainder = Next - Whole;
     return true;
 }

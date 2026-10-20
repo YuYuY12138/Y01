@@ -113,7 +113,7 @@ UY01R36Profile* AY01R36GameMode::BuildFormalProfile(FString& Error)
     static const TCHAR* BasePath = TEXT("/Game/Y01Playground/Data/DT_");
     auto* Profile = NewObject<UY01R36Profile>(this);
     const UEnum* KindEnum = StaticEnum<EY01TableKind>();
-    for (int32 I = 1; I <= static_cast<int32>(EY01TableKind::DamageEffect); ++I)
+    for (int32 I = 1; I <= static_cast<int32>(EY01TableKind::Consumable); ++I)
     {
         const EY01TableKind Kind = static_cast<EY01TableKind>(I);
         const FString Name = KindEnum->GetNameStringByValue(I);
@@ -139,7 +139,7 @@ UY01R36Profile* AY01R36GameMode::BuildFormalProfile(FString& Error)
     // 从Startup填充Profile
     Profile->Character = Rules->Startup.Character;
     Profile->bTrainingEnabled = Rules->Startup.bTrainingEnabled;
-    Profile->bR34AutoAttackEnabled = Rules->Startup.bR34AutoAttackEnabled;
+    Profile->bR34AutoAttackEnabled = Rules->Startup.bAutoAttackEnabled;
     Profile->bCoreDefenseEnabled = Rules->Startup.bCoreDefenseEnabled;
     Profile->bEconomyEnabled = Rules->Startup.bEconomyEnabled;
     Profile->CoreRules = {EY01TableKind::MatchRules, TEXT("Default")};
@@ -193,7 +193,7 @@ UY01PlaygroundProfile* AY01R36GameMode::SelectProfile(FString& Error)
         if (Count == 1 && InMemory && InMemory->GetOutermost() == GetTransientPackage()) { return InMemory; }
     }
 #endif
-    // 无参数/content始终从正式24表构建，不依赖地图Config或磁盘Profile的加载状态。
+    // 无参数/content始终从正式25表构建，不依赖地图Config或磁盘Profile的加载状态。
     FString FormalError;
     auto* Formal = BuildFormalProfile(FormalError);
     if (Formal) { return Formal; }

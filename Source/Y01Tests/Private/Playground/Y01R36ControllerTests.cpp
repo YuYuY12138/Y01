@@ -317,11 +317,16 @@ bool FY01R36UIRequestChainTest::RunTest(const FString& Case)
     const auto Target = Skill ? EY01R36Zone::Skill : EY01R36Zone::Equipment;
     TestTrue(TEXT("控件发送真实意图"), Drop(Id, Target, 0));
     TestTrue(TEXT("未刷新完整视图前仍在等待"), Panel->GetModel().IsPending());
-    TestEqual(TEXT("不乐观搬动原格"), Panel->GetBackpack()->GetNumItems(), 1);
+    TestEqual(TEXT("装备在途只做显示预览，技能书不预览"), Panel->GetBackpack()->GetNumItems(), Skill ? 1 : 0);
+    if (!Skill) { TestEqual(TEXT("预览槽显示被拖装备"), Panel->GetCell(Target, 0)->GetItemId(), Id); }
     Present(); TestFalse(TEXT("权威回执解除等待"), Panel->GetModel().IsPending());
     auto V = F.View();
     if (Case == TEXT("DeathRace"))
-    { TestEqual(TEXT("服务器死亡拒绝"), V.Response.Code, E::Dead); TestTrue(TEXT("失败文字展示"), Panel->GetModel().Status().Contains(TEXT("死亡"))); return true; }
+    {
+        TestEqual(TEXT("服务器死亡拒绝"), V.Response.Code, E::Dead); TestTrue(TEXT("失败文字展示"), Panel->GetModel().Status().Contains(TEXT("死亡")));
+        TestEqual(TEXT("拒绝后物品回到背包原格"), Panel->GetBackpack()->GetNumItems(), 1);
+        TestFalse(TEXT("拒绝后装备槽还原为空"), Panel->GetCell(Target, 0)->GetItemId().IsValid()); return true;
+    }
     TestEqual(TEXT("实际权威成功"), V.Response.Code, E::None); TestEqual(TEXT("权威提交后格才消失"), Panel->GetBackpack()->GetNumItems(), 0);
     if (!Skill)
     {
@@ -585,16 +590,10 @@ bool FY01R36EconomyWidgetRouteTest::RunTest(const FString& Case)
     }
     if (Craft)
     {
-        Click(TEXT("MaterialMode"));
-        TestTrue(TEXT("真实按钮进入材料选择"), Panel->IsSelectingMaterials());
-        const FPointerEvent Mouse(0, FVector2D(20), FVector2D(20), TSet<FKey>{EKeys::LeftMouseButton}, EKeys::LeftMouseButton, 0, FModifierKeysState());
-        for (const auto& Item : Before.Items)
-        {
-            auto* Cell = CreateWidget<UY01R36Cell>(F.World); Cell->Configure(Panel.Get(), EY01R36Zone::Backpack, INDEX_NONE, Item.ItemId);
-            const auto CellSlate = Cell->TakeWidget();
-            TestTrue(TEXT("真实Cell左键处理材料选择"), Cell->NativeOnMouseButtonDown(FGeometry(), Mouse).IsEventHandled());
-        }
-        TestEqual(TEXT("合成前已选择五件真实材料"), Panel->GetModel().Materials().Num(), 5);
+        // 一键合成：客户端按最低可合品质自动选包内五件，不再手动选材。
+        TArray<FY01ItemConsume> Picked; FName Recipe;
+        TestTrue(TEXT("自动选出五件真实材料"), Panel->GetModel().PickMaterials(Picked, Recipe));
+        TestEqual(TEXT("合成前自动选择五件真实材料"), Picked.Num(), 5);
         if (Case == TEXT("MaterialStale")) { F.Send(F.Request(Before.Items[0].ItemId)); }
         Click(TEXT("Synthesize"));
     }
@@ -617,7 +616,15 @@ bool FY01R36EconomyWidgetRouteTest::RunTest(const FString& Case)
         TestEqual(TEXT("只有权威提交后才更新包"), After.Items.Num(), Before.Items.Num() + Delta);
         TestEqual(TEXT("免费合成天赋与购买价格"), After.Gold, Before.Gold - (Craft || Case == TEXT("Talent") ? 0 : Case == TEXT("Direct") ? 50 : 10));
         TestEqual(TEXT("买入或合成不自动替换槽"), After.EquipmentSlots, Before.EquipmentSlots);
+        if (Case != TEXT("Talent"))
+        {
+            const auto& Log = Panel->GetModel().GameLog();
+            const FString Last = Log.IsEmpty() ? FString() : Log.Last().ToString();
+            TestTrue(TEXT("权威成功后游戏内LOG记录真实获得"), Craft ? Last.StartsWith(TEXT("消耗：")) && Last.Contains(TEXT("；合成：")) : Last.StartsWith(TEXT("购买：")));
+        }
     }
+    else if (Panel->GetModel().GameLog().Num())
+    { TestTrue(TEXT("失败只记灰色原因"), Panel->GetModel().GameLog().Last().bFailure); }
     FY01CommittedView OtherAfter; Other->GetLoadout()->ReadCommittedView(OtherAfter);
     TestTrue(TEXT("其他owner完整视图不变"), FY01CommittedView::StaticStruct()->CompareScriptStruct(&OtherBefore, &OtherAfter, 0));
     return true;

@@ -4,6 +4,8 @@
 #include "Combat/Y01Monster.h"
 #include "Combat/Y01Core.h"
 #include "Player/Y01PlayerState.h"
+#include "Player/Y01SourceEffectsComponent.h"
+#include "Player/Y01LoadoutComponent.h"
 #include "Player/Y01Character.h"
 #include "Player/Y01PlayerController.h"
 #include "Data/Y01DataSubsystem.h"
@@ -42,6 +44,8 @@ AY01GameMode::AY01GameMode()
 void AY01GameMode::BeginPlay()
 {
     Super::BeginPlay();
+    if (auto* Kills = GetWorld()->GetSubsystem<UY01KillRewards>())
+    { KillRewardHandle = Kills->OnEffectiveKill.AddUObject(this, &AY01GameMode::OnMainlineMonsterKill); }
     if (HasAuthority() && !bConfigured && !LoadMatchConfiguration(ConfigurationError))
     { UE_LOG(LogTemp, Error, TEXT("Y01Flow MissingConfiguration Waiting: %s"), *ConfigurationError); }
 }
@@ -143,7 +147,10 @@ bool AY01GameMode::RefreshAutomaticSnapshot()
     return bChanged;
 }
 void AY01GameMode::EndPlay(const EEndPlayReason::Type Reason)
-{ CancelTimers(); Super::EndPlay(Reason); }
+{
+    if (auto* Kills = GetWorld()->GetSubsystem<UY01KillRewards>()) { Kills->OnEffectiveKill.Remove(KillRewardHandle); }
+    CancelTimers(); Super::EndPlay(Reason);
+}
 void AY01GameMode::PostLogin(APlayerController* NewPlayer)
 {
     Super::PostLogin(NewPlayer);
@@ -186,8 +193,9 @@ bool AY01GameMode::TryConfigureMatch(const FY01DataCatalog& Catalog, const TArra
     {
         const auto* Wave = Catalog.FindRow<FY01WaveRow>(Ref, Errors);
         const auto* Reward = Wave ? Catalog.FindRow<FY01RewardPackageRow>(Wave->Reward, Errors) : nullptr;
-        if (!Wave || !Reward || Reward->Domain != EY01RewardDomain::MatchPersonal || !Reward->Items.IsEmpty())
-        { OutError = TEXT("MissingConfiguration: 波次或奖励非法；当前奖励提交仅支持金币与经验，不能忽略物品"); return false; }
+        if (!Wave || !Reward || Reward->Domain != EY01RewardDomain::MatchPersonal
+            || Reward->Items.ContainsByPredicate([](const FY01RewardEntry& E) { return E.Item.Type != EY01TableKind::Consumable || E.Quantity <= 0; }))
+        { OutError = TEXT("MissingConfiguration: 波次或奖励非法；波次奖励物品仅支持数量为正的消耗道具，不能忽略物品"); return false; }
         int64 Count = 0;
         if (Wave->Schedule == EY01WaveSchedule::Batches)
         { for (const auto& Batch : Wave->Batches) { for (const auto& M : Batch.Monsters) { Count += M.Count; } } }
@@ -219,8 +227,15 @@ bool AY01GameMode::TryConfigureMatch(const FY01DataCatalog& Catalog, const TArra
     FY01DataValidation PresentationErrors;
     FY01DataRef RulesRef; RulesRef.Type = EY01TableKind::MatchRules; RulesRef.RowName = TEXT("Default");
     if (const auto* Rules = Catalog.FindRow<FY01MatchRulesRow>(RulesRef, PresentationErrors))
-    { GetFlowState()->Presentation.Values = Rules->Presentation; }
-    else { GetFlowState()->Presentation.Values = FY01MatchPresentation(); }
+    {
+        GetFlowState()->Presentation.Values = Rules->Presentation;
+        DefaultCritMultiplier = Rules->DefaultCritMultiplier;
+    }
+    else
+    {
+        GetFlowState()->Presentation.Values = FY01MatchPresentation();
+        DefaultCritMultiplier = 2;
+    }
     ++GetFlowState()->Presentation.Revision;
     for (APlayerState* State : GetFlowState()->PlayerArray)
     {
@@ -444,15 +459,36 @@ bool AY01GameMode::CommitWaveReward(int32 WaveIndex)
     if (IsGameplayFrozen() || !Rewards.IsValidIndex(WaveIndex) || RewardedWaveKeys.Contains(WaveIndex)) { return false; }
     const auto& Reward = Rewards[WaveIndex];
     TArray<AY01PlayerState*> Recipients;
+    TArray<double> GoldAmounts;
     for (APlayerState* State : GetFlowState()->PlayerArray)
     {
         auto* Player = Cast<AY01PlayerState>(State);
-        if (!IsValid(Player) || !Player->IsCharacterInitialized() || !Player->CanAddMatchReward(Reward.Gold, Reward.Experience)) { return false; }
-        Recipients.AddUnique(Player);
+        if (!IsValid(Player) || !Player->IsCharacterInitialized()) { continue; }
+        FY01ResolvedAttributes Resolved; double Gain = 0;
+        if (Player->GetSourceEffects()->ObserveAttributes(Resolved).IsOk()) { Gain = Resolved.GoldGainPercent; }
+        const double Gold = Reward.Gold * (1. + Gain);
+        // 经验仍走整数预检；金币经小数钱包（floor 部分容量并入校验）。
+        if (!Player->CanAddMatchReward(0, Reward.Experience)) { return false; }
+        if (FMath::FloorToDouble(Gold + Player->GetRewardRemainder()) > static_cast<double>(MAX_int32) - Player->GetGold()) { return false; }
+        Recipients.Add(Player); GoldAmounts.Add(Gold);
     }
     // 服务器局内单调波次号作为幂等key；没有客户端key入口。预校验到提交之间不调用外部政策或委托。
     RewardedWaveKeys.Add(WaveIndex);
-    for (auto* Player : Recipients) { const bool bApplied = Player->TryAddMatchReward(Reward.Gold, Reward.Experience); check(bApplied); }
+    for (int32 I = 0; I < Recipients.Num(); ++I)
+    {
+        const bool bApplied = Recipients[I]->TryAddFractionalGold(GoldAmounts[I])
+            && Recipients[I]->TryAddMatchReward(0, Reward.Experience);
+        check(bApplied);
+        auto* Loadout = Recipients[I]->GetLoadout();
+        if (Reward.Items.IsEmpty() || !Loadout || !Loadout->IsInitialized()) { continue; }
+        TArray<FY01ItemGrant> Grants;
+        for (const auto& Entry : Reward.Items)
+        { for (int32 Q = 0; Q < Entry.Quantity; ++Q) { Grants.Add({FGuid::NewGuid(), Entry.Item}); } }
+        // 金币经验已结清；道具入包失败（如背包满）只记录，不回滚波次奖励。
+        const auto ItemResult = Loadout->AddItems(MatchCatalog, Grants);
+        if (!ItemResult.IsOk())
+        { UE_LOG(LogTemp, Warning, TEXT("Y01Flow WAVE_ITEM_REJECT Player=%s Wave=%d: %s"), *Recipients[I]->GetName(), WaveIndex, *ItemResult.Message); }
+    }
     if (bAutomaticWaves) { S.WaveStates[WaveIndex].bRewarded = true; RefreshAutomaticSnapshot(); }
     else { S.bWaveCompleted = true; }
     ++S.CompletedWaves; Publish();
@@ -498,4 +534,33 @@ void AY01GameMode::CancelTimers()
     GetWorldTimerManager().ClearTimer(PreparationTimer);
     for (auto& Handle : SpawnTimers) { GetWorldTimerManager().ClearTimer(Handle); }
     SpawnTimers.Reset();
+}
+// R37第四期：主线怪死亡金币在局玩家均分；金币获取%逐人放大，小数经Fractional钱包入账。
+void AY01GameMode::OnMainlineMonsterKill(const FY01KillEvent& Event)
+{
+    auto* Monster = Event.Monster.Get();
+    if (!HasAuthority() || !bConfigured || !Monster || !GetWaveMonsters().Contains(Monster)) { return; }
+    FY01DataValidation Query;
+    const auto* Row = MatchCatalog.FindRow<FY01MonsterRow>(Event.Definition, Query);
+    if (!Row || Row->Gold <= 0) { return; }
+    TArray<AY01PlayerState*> Present;
+    for (APlayerState* State : GetFlowState()->PlayerArray)
+    {
+        auto* P = Cast<AY01PlayerState>(State);
+        if (!IsValid(P) || !P->IsCharacterInitialized()) { continue; }
+        const auto* PC = Cast<APlayerController>(P->GetOwner());
+        if (!PC || !IsValid(PC)) { continue; }   // 断线不含；死亡等待与练功房玩家仍在局
+        Present.Add(P);
+    }
+    if (Present.IsEmpty()) { return; }
+    const double Share = static_cast<double>(Row->Gold) / Present.Num();
+    for (auto* P : Present)
+    {
+        FY01ResolvedAttributes Resolved; double Gain = 0;
+        if (P->GetSourceEffects()->ObserveAttributes(Resolved).IsOk()) { Gain = Resolved.GoldGainPercent; }
+        else { UE_LOG(LogTemp, Display, TEXT("Y01R37 GOLD_SPLIT_OBSERVE_FAIL Player=%s"), *P->GetName()); }
+        const double Amount = Share * (1. + Gain);
+        if (!P->TryAddFractionalGold(Amount))
+        { UE_LOG(LogTemp, Display, TEXT("Y01R37 GOLD_SPLIT_REJECT Player=%s Gold=%d Share=%.17g"), *P->GetName(), Row->Gold, Amount); }
+    }
 }

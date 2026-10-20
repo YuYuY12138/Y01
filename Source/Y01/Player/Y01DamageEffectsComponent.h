@@ -51,6 +51,7 @@ private:
         double Expires = 0;
         double LastMove = 0;
         float Snapshot = 0;
+        bool bCritical = false; // 放置/发射时判定的暴击，产物全程沿用。
         TMap<TWeakObjectPtr<AActor>, FBeat> Beats;
         TWeakObjectPtr<AY01DamageVisual> Visual;
     };
@@ -59,6 +60,7 @@ private:
         FSource Source;
         FY01DamageSelection Selection;
         float Snapshot = 0;
+        bool bCritical = false; // 主动施放快照时刻判定的暴击。
     };
     bool Eligible() const;
     bool CanRun(FGameplayAbilitySpecHandle Active = {}) const;
@@ -68,11 +70,11 @@ private:
     bool CanActivate(FGameplayAbilitySpecHandle Handle) const;
     bool PrepareActive(FGameplayAbilitySpecHandle Handle, TArray<FActiveCast>& Out);
     void ExecuteActive(const TArray<FActiveCast>& Casts, uint64 Epoch, FGameplayAbilitySpecHandle Handle);
-    void Launch(const FSource& Source, const FY01DamageSelection& Selection, float Snapshot, double Time);
+    void Launch(const FSource& Source, const FY01DamageSelection& Selection, float Snapshot, double Time, bool bCritical);
     void Advance(uint64 Id, double Time);
-    void Hit(uint64 Execution, uint64 Beat, AActor* Target, float Damage);
+    void Hit(uint64 Execution, uint64 Beat, AActor* Target, float Damage, bool bCritical, bool bLifesteal);
     bool ConsumeAuthorization(const FGameplayEffectSpec& Spec, const UY01CombatAbilitySystem* Source,
-        const UY01CombatAbilitySystem* Target, float& Damage);
+        const UY01CombatAbilitySystem* Target, float& Damage, bool& bCritical, bool& bLifesteal);
     void RemoveProduct(uint64 Id);
     bool MakeVisual(FProduct& Product);
     AY01PlayerState* Player() const;
@@ -92,5 +94,7 @@ private:
     const FGameplayEffectContext* AuthorizedContext = nullptr;
     TWeakObjectPtr<UY01CombatAbilitySystem> AuthorizedTarget;
     float AuthorizedDamage = 0;
+    bool AuthorizedCritical = false; // 与Damage授权同生命周期：Hit记录、ConsumeAuthorization消费。
+    bool AuthorizedLifesteal = false;
     bool bAuthorizationAvailable = false;
 };

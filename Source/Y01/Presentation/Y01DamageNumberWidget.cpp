@@ -2,7 +2,7 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/TextBlock.h"
 #include "Engine/Font.h"
-#include "Internationalization/Internationalization.h"
+#include "Player/Y01AttributeResolver.h"
 #include "Widgets/SWidget.h"
 
 TSharedRef<SWidget> UY01DamageNumberWidget::RebuildWidget()
@@ -30,10 +30,7 @@ void UY01DamageNumberWidget::SetNumber(float Amount, const FLinearColor& Color)
     if (!Number) { TakeWidget(); }
     if (!FMath::IsFinite(Amount) || Amount <= 0 || !FMath::IsFinite(Color.R) || !FMath::IsFinite(Color.G)
         || !FMath::IsFinite(Color.B) || !FMath::IsFinite(Color.A)) { ResetNumber(); return; }
-    FNumberFormattingOptions Format;
-    Format.SetUseGrouping(false).SetMinimumFractionalDigits(0).SetMaximumFractionalDigits(1);
-    Number->SetText(Amount < .1f ? FText::FromString(TEXT("<0.1"))
-        : FText::AsNumber(Amount, &Format, FInternationalization::Get().GetInvariantCulture()));
+    Number->SetText(FText::FromString(FY01AttributeResolver::WholeText(Amount)));
     Number->SetColorAndOpacity(FSlateColor(Color));
     SetRenderTransform(FWidgetTransform());
     SetRenderOpacity(1.f);

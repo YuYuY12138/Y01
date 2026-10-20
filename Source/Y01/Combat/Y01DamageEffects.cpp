@@ -1,7 +1,11 @@
 #include "Combat/Y01DamageEffects.h"
 #include "Combat/Y01Targeting.h"
+#include "Combat/Y01DamagePipeline.h"
 #include "Player/Y01DamageEffectsComponent.h"
 #include "Player/Y01PlayerState.h"
+#include "Player/Y01LoadoutComponent.h"
+#include "Player/Y01ShieldComponent.h"
+#include "Player/Y01AttributeResolver.h"
 #include "GameplayEffectComponents/AssetTagsGameplayEffectComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
@@ -130,7 +134,7 @@ FString Y01Damage::Describe(const TArray<FY01ItemDamageEffect>& Effects)
     for (const auto& E : Effects)
     {
         const auto& R = E.Config; if (!R.IsValid()) { continue; }
-        Text += FString::Printf(TEXT("%s：%g"),Products[uint8(R.Product)],R.FixedDamage);
+        Text += FString::Printf(TEXT("%s：%s"),Products[uint8(R.Product)],*FY01AttributeResolver::WholeText(R.FixedDamage));
         for (const auto& T : R.Terms) { Text += FString::Printf(TEXT(" + %s×%g%%"),Attributes[uint8(T.Attribute)],T.Coefficient*100); }
         if (R.Trigger == EY01DamageTrigger::Periodic) { Text += FString::Printf(TEXT("；每%g秒"),R.PeriodSeconds); }
         if (R.Product == EY01DamageProduct::AttachedDot || R.Product == EY01DamageProduct::IndependentArea || R.Product == EY01DamageProduct::BoundArea)
@@ -163,6 +167,13 @@ void UY01DamageAbility::ExecuteSkill(FGameplayAbilitySpecHandle Handle, const FG
     const uint64 Epoch = D->Epoch;
     if (!D->PrepareActive(Handle,Casts) || !CommitAbility(Handle,Info,Activation))
     { EndAbility(Handle,Info,Activation,false,true); return; }
+    // 施放护盾钩子：提交成功后按技能来源Id通知护盾组件记一次施放（ShieldOnCast）。
+    if (auto* Shield = P->GetShield())
+    {
+        // 已授予技能实例自带LearnedId；经Loadout解析为运行时来源Id。
+        if (const auto* Grant = P->GetCombatASC()->FindGrantedAbility(Handle); Grant && Grant->LearnedId.IsValid())
+        { Shield->NotifyCast(P->GetLoadout()->SourceId(Grant->LearnedId,EY01RuntimeSourceKind::Skill).Id); }
+    }
     D->ExecuteActive(Casts,Epoch,Handle);
     EndAbility(Handle,Info,Activation,false,false);
 }
@@ -179,14 +190,20 @@ void UY01TemplateDamageExecution::Execute_Implementation(const FGameplayEffectCu
     const auto* Source = Cast<UY01CombatAbilitySystem>(Parameters.GetSourceAbilitySystemComponent());
     const auto* Target = Cast<UY01CombatAbilitySystem>(Parameters.GetTargetAbilitySystemComponent());
     auto* Manager = const_cast<UY01DamageEffectsComponent*>(Cast<UY01DamageEffectsComponent>(Parameters.GetOwningSpec().GetContext().GetSourceObject()));
-    float Base = 0;
-    if (!Manager || !Manager->ConsumeAuthorization(Parameters.GetOwningSpec(),Source,Target,Base)) { return; }
-    const float Damage = FMath::Max(0.f,Base-Target->GetNumericAttribute(UY01AttributeSet::GetArmorAttribute()));
-    const float Health = Target->GetNumericAttribute(UY01AttributeSet::GetHealthAttribute());
-    if (FMath::IsFinite(Damage) && Damage > 0 && Health > 0)
+    float Base = 0; bool bCritical = false; bool bLifesteal = false;
+    if (!Manager || !Manager->ConsumeAuthorization(Parameters.GetOwningSpec(),Source,Target,Base,bCritical,bLifesteal)) { return; }
+    // 共享伤害管线：基础 → ×暴击倍率 → 减甲(下限0) → 护盾吸收(仅玩家) → 扣血(不超当前)。
+    const auto Result = Y01DamagePipeline::Resolve(Source,Target,Base,bCritical);
+    if (Result.bValid && Result.HealthLoss > 0)
     {
-        if (auto* Spec = Parameters.GetOwningSpecForPreExecuteMod()) { Spec->SetSetByCallerMagnitude(Y01Tags::Data_DamageDisplay,Damage); }
-        Output.AddOutputModifier(FGameplayModifierEvaluatedData(UY01AttributeSet::GetHealthAttribute(),EGameplayModOp::Additive,-FMath::Min(Damage,Health)));
+        if (auto* Spec = Parameters.GetOwningSpecForPreExecuteMod())
+        {
+            Spec->SetSetByCallerMagnitude(Y01Tags::Data_DamageDisplay,Result.AfterArmor);
+            // 暴击标记与可吸血开关（随来源效果配置）写入spec，供事件标记与吸血判定消费。
+            Spec->SetSetByCallerMagnitude(Y01Tags::Data_Crit,Result.bCritical ? 1.f : 0.f);
+            Spec->SetSetByCallerMagnitude(Y01Tags::Data_LifestealAllowed,bLifesteal ? 1.f : 0.f);
+        }
+        Output.AddOutputModifier(FGameplayModifierEvaluatedData(UY01AttributeSet::GetHealthAttribute(),EGameplayModOp::Additive,-Result.HealthLoss));
     }
 }
 AY01DamageVisual::AY01DamageVisual()
@@ -207,13 +224,15 @@ void AY01DamageVisual::Configure(EY01DamageProduct InProduct, double InRadius)
 { Product=InProduct; Radius=static_cast<float>(InRadius); OnRep_Visual(); ForceNetUpdate(); }
 void AY01DamageVisual::OnRep_Visual()
 {
-    const bool Area = Product==EY01DamageProduct::IndependentArea || Product==EY01DamageProduct::BoundArea;
+    const bool Flash = Product==EY01DamageProduct::Instant;
+    const bool Area = Flash || Product==EY01DamageProduct::IndependentArea || Product==EY01DamageProduct::BoundArea;
     Shape->SetVisibility(!Area);
     Shape->SetRelativeScale3D(FVector(Product==EY01DamageProduct::AttachedDot ? .24 : .4));
     Shape->SetRelativeLocation(Product==EY01DamageProduct::AttachedDot ? FVector(0,0,55) : FVector::ZeroVector);
     Rings->ClearInstances();
     if (GetNetMode() == NM_DedicatedServer) { return; }
-    const FLinearColor Color = Product==EY01DamageProduct::BoundArea ? FLinearColor(1,.22f,.015f) : FLinearColor(.05f,1,.12f);
+    const FLinearColor Color = Flash ? FLinearColor(1,.8f,.08f)
+        : Product==EY01DamageProduct::BoundArea ? FLinearColor(1,.22f,.015f) : FLinearColor(.05f,1,.12f);
     if (auto* Material = Shape->CreateAndSetMaterialInstanceDynamic(0)) { Material->SetVectorParameterValue(TEXT("Color"), Color); }
     if (!Area) { return; }
     if (auto* Material = Rings->CreateAndSetMaterialInstanceDynamic(0)) { Material->SetVectorParameterValue(TEXT("Color"), Color); }
@@ -234,7 +253,9 @@ void AY01DamageVisual::Tick(float DeltaSeconds)
     Super::Tick(DeltaSeconds);
     if (GetNetMode()==NM_DedicatedServer) { return; }
     const FVector P=GetActorLocation();
-    if (Product==EY01DamageProduct::IndependentArea || Product==EY01DamageProduct::BoundArea)
+    if (Product==EY01DamageProduct::Instant)
+    { DrawDebugCircle(GetWorld(),P+FVector(0,0,-75),Radius,48,FColor(255,204,20),false,-1,0,6,FVector::ForwardVector,FVector::RightVector,false); }
+    else if (Product==EY01DamageProduct::IndependentArea || Product==EY01DamageProduct::BoundArea)
     {
         const FColor Color=Product==EY01DamageProduct::BoundArea ? FColor::Orange : FColor::Green;
         DrawDebugCircle(GetWorld(),P+FVector(0,0,-75),Radius,48,Color,false,-1,0,5,FVector::ForwardVector,FVector::RightVector,false);

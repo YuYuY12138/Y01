@@ -150,7 +150,8 @@ bool FY01R36DataTest::RunTest(const FString& Case)
         { TestTrue(TEXT("旧内容效果列表默认空"), SourceRefs(F, Kind).IsEmpty()); }
         auto* Magnitude = FindFProperty<FDoubleProperty>(FY01SourceEffectRow::StaticStruct(), TEXT("Magnitude"));
         TestNotNull(TEXT("幅度反射为double"), Magnitude);
-        for (const TCHAR* Name : { TEXT("Kind"), TEXT("Magnitude"), TEXT("SourceAttribute"), TEXT("TargetAttribute"), TEXT("Amount") })
+        for (const TCHAR* Name : { TEXT("Kind"), TEXT("Magnitude"), TEXT("SourceAttribute"), TEXT("TargetAttribute"), TEXT("Amount"),
+            TEXT("Condition"), TEXT("ConditionThreshold"), TEXT("DurationSeconds"), TEXT("LayerCap"), TEXT("IntervalSeconds") })
         {
             const auto* Property = FindFProperty<FProperty>(FY01SourceEffectRow::StaticStruct(), Name);
             TestTrue(TEXT("效果字段可编辑且蓝图只读"), Property && Property->HasAllPropertyFlags(CPF_Edit | CPF_BlueprintVisible | CPF_BlueprintReadOnly));
@@ -160,7 +161,7 @@ bool FY01R36DataTest::RunTest(const FString& Case)
             && ShopKind->HasAllPropertyFlags(CPF_Edit | CPF_BlueprintVisible | CPF_BlueprintReadOnly));
         int32 OwnFields = 0;
         for (TFieldIterator<FProperty> It(FY01SourceEffectRow::StaticStruct(), EFieldIteratorFlags::ExcludeSuper); It; ++It) { ++OwnFields; }
-        TestEqual(TEXT("效果行保留现有种类、幅度及三项属性映射字段"), OwnFields, 5);
+        TestEqual(TEXT("效果行保留种类、幅度、属性映射及R37条件／持续／层数／间隔字段"), OwnFields, 10);
         return true;
     }
     if (Case == TEXT("Legacy19")) { ExpectValid(); return true; }
@@ -217,7 +218,7 @@ bool FY01R36DataTest::RunTest(const FString& Case)
         else if (Case.EndsWith(TEXT(".Fraction"))) { Row.Magnitude = 0.25; ExpectValid(); }
         else if (Case.EndsWith(TEXT(".MaxFinite"))) { Row.Magnitude = std::numeric_limits<double>::max(); ExpectValid(); }
         else if (Case.EndsWith(TEXT("Kind")))
-        { Row.Kind = static_cast<EY01SourceEffectKind>(Case.EndsWith(TEXT("UnknownKind")) ? 255 : static_cast<uint8>(EY01SourceEffectKind::MappingCoefficientAdd) + 1); ExpectError(EKind::SourceEffect, ECode::InvalidEnum, TEXT("Kind"), TEXT("Gold")); }
+        { Row.Kind = static_cast<EY01SourceEffectKind>(Case.EndsWith(TEXT("UnknownKind")) ? 255 : static_cast<uint8>(EY01SourceEffectKind::ShieldOnCast) + 1); ExpectError(EKind::SourceEffect, ECode::InvalidEnum, TEXT("Kind"), TEXT("Gold")); }
         else
         {
             Row.Magnitude = Case.EndsWith(TEXT(".Negative")) ? -0.25 : Case.EndsWith(TEXT(".NaN")) ? std::numeric_limits<double>::quiet_NaN()
@@ -329,7 +330,7 @@ bool FY01R36DataTest::RunTest(const FString& Case)
             Row.Quantity = Case.EndsWith(TEXT("Zero")) ? 0 : Case.EndsWith(TEXT("Negative")) ? -1 : Case.EndsWith(TEXT("Two")) ? 2 : MAX_int32;
             if (bDirect || Row.Quantity <= 0) { Field = TEXT("Quantity"); Code = bDirect ? ECode::Invariant : ECode::InvalidNumber; }
         }
-        if (Case.EndsWith(TEXT("Kind"))) { Row.ShopKind = static_cast<EY01ShopKind>(Case.EndsWith(TEXT("UnknownKind")) ? 255 : 3); Field = TEXT("ShopKind"); Code = ECode::InvalidEnum; }
+        if (Case.EndsWith(TEXT("Kind"))) { Row.ShopKind = static_cast<EY01ShopKind>(Case.EndsWith(TEXT("UnknownKind")) ? 255 : 4); Field = TEXT("ShopKind"); Code = ECode::InvalidEnum; }
         if (Field.IsEmpty()) { ExpectValid(); } else { ExpectError(EKind::ShopOffer, Code, Field); }
         return true;
     }
@@ -505,7 +506,7 @@ bool FY01R36S1SchemaTest::RunTest(const FString& Case)
         const auto* Presentation = CastField<FStructProperty>(Property(FY01MatchRulesRow::StaticStruct(), TEXT("Presentation")));
         if (Startup)
         {
-            for (const TCHAR* Name : { TEXT("Character"), TEXT("bTrainingEnabled"), TEXT("bR34AutoAttackEnabled"), TEXT("bEconomyEnabled"),
+            for (const TCHAR* Name : { TEXT("Character"), TEXT("bTrainingEnabled"), TEXT("bAutoAttackEnabled"), TEXT("bEconomyEnabled"),
                 TEXT("bCoreDefenseEnabled"), TEXT("TalentChoice"), TEXT("InitialGold"), TEXT("BaseGoldPerSecond"), TEXT("DropFlightSeconds") })
             { Property(Startup->Struct, Name); }
         }
@@ -702,7 +703,7 @@ bool FY01R36S1CatalogTest::RunTest(const FString& Case)
     }
     if (Case.StartsWith(TEXT("Registration.")))
     {
-        const EKind Kind = static_cast<EKind>(Is(TEXT("None")) ? 0 : Is(TEXT("Sentinel")) ? 25 : 255);
+        const EKind Kind = static_cast<EKind>(Is(TEXT("None")) ? 0 : Is(TEXT("Sentinel")) ? 26 : 255);
         F.Tables.Add(Kind, F.Tables[EKind::Equipment]); Error(Kind, ECode::InvalidEnum, TEXT("Tables"), NAME_None); return true;
     }
     if (Case.StartsWith(TEXT("Growth.")))
@@ -712,9 +713,9 @@ bool FY01R36S1CatalogTest::RunTest(const FString& Case)
         if (Is(TEXT("Zero"))) { R.Delta = 0; Valid(); }
         else if (Is(TEXT("Fraction"))) { R.Delta = 0.125; Valid(); }
         else if (Is(TEXT("MaxFinite"))) { R.Delta = std::numeric_limits<double>::max(); Valid(); }
-        else if (Case.Contains(TEXT(".Trigger"))) { R.Trigger = static_cast<EY01GrowthTrigger>(Is(TEXT("TriggerUnknown")) ? 255 : 1); Error(EKind::GrowthRule, ECode::InvalidEnum, TEXT("Trigger"), Name); }
+        else if (Case.Contains(TEXT(".Trigger"))) { R.Trigger = static_cast<EY01GrowthTrigger>(Is(TEXT("TriggerUnknown")) ? 255 : 200); Error(EKind::GrowthRule, ECode::InvalidEnum, TEXT("Trigger"), Name); }
         else if (Case.Contains(TEXT(".Target"))) { R.Target = static_cast<EY01GrowthTarget>(Is(TEXT("TargetUnknown")) ? 255 : 2); Error(EKind::GrowthRule, ECode::InvalidEnum, TEXT("Target"), Name); }
-        else if (Case.Contains(TEXT(".Attribute"))) { R.Attribute = static_cast<EY01GrowthAttribute>(Is(TEXT("AttributeUnknown")) ? 255 : 2); Error(EKind::GrowthRule, ECode::InvalidEnum, TEXT("Attribute"), Name); }
+        else if (Case.Contains(TEXT(".Attribute"))) { R.Attribute = static_cast<EY01GrowthAttribute>(Is(TEXT("AttributeUnknown")) ? 255 : 200); Error(EKind::GrowthRule, ECode::InvalidEnum, TEXT("Attribute"), Name); }
         else if (Is(TEXT("Mismatch"))) { R.Attribute = R.Target == EY01GrowthTarget::Player ? EY01GrowthAttribute::AttackDamage : EY01GrowthAttribute::Strength; Error(EKind::GrowthRule, ECode::Invariant, TEXT("Attribute"), Name); }
         else { R.Delta = Number(); Error(EKind::GrowthRule, ECode::InvalidNumber, TEXT("Delta"), Name); }
         return true;

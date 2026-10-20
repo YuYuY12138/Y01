@@ -1,8 +1,12 @@
 #include "Playground/Y01TestSkill.h"
 #include "AbilitySystemGlobals.h"
+#include "Combat/Y01DamagePipeline.h"
 #include "GameplayEffectComponents/AssetTagsGameplayEffectComponent.h"
 #include "Playground/Y01PlaygroundRuntime.h"
 #include "Player/Y01PlayerState.h"
+#include "Player/Y01LoadoutComponent.h"
+#include "Player/Y01GrowthComponent.h"
+#include "Player/Y01ShieldComponent.h"
 #include "Combat/Y01Monster.h"
 #include "Combat/Y01Core.h"
 #include "Components/SphereComponent.h"
@@ -101,6 +105,13 @@ void UY01TestSkillAbility::ExecuteSkill(FGameplayAbilitySpecHandle Handle, const
     const float Damage = Grant->CommittedAttackDamage * Grant->TestSkill.DamageCoefficient;
     if (!FMath::IsFinite(Damage) || Damage < 0)
     { EndAbility(Handle, ActorInfo, ActivationInfo, false, true); return; }
+    // 施放护盾钩子：提交成功后按技能来源Id通知护盾组件记一次施放（ShieldOnCast）。
+    if (auto* PlayerState = Cast<AY01PlayerState>(ASC->GetOwner()))
+    {
+        // 已授予技能实例自带LearnedId；经Loadout解析为运行时来源Id。
+        if (auto* Shield = PlayerState->GetShield(); Shield && Grant->LearnedId.IsValid())
+        { Shield->NotifyCast(PlayerState->GetLoadout()->SourceId(Grant->LearnedId, EY01RuntimeSourceKind::Skill).Id); }
+    }
     FActorSpawnParameters Params; Params.Owner = ASC->GetOwner(); Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
     auto* Attack = ASC->GetWorld()->SpawnActor<AY01TestAttack>(ASC->GetAvatarActor()->GetActorLocation(), FRotator::ZeroRotator, Params);
     if (Attack) { Attack->Initialize(ASC, *Grant, Direction, Damage); }
@@ -133,12 +144,20 @@ void UY01TestSkillDamageExecution::Execute_Implementation(const FGameplayEffectC
     const auto* Target = Cast<UY01CombatAbilitySystem>(Parameters.GetTargetAbilitySystemComponent());
     const auto* Attack = Cast<AY01TestAttack>(Parameters.GetOwningSpec().GetContext().GetSourceObject());
     if (!Attack || !Attack->AuthorizesDamage(Source, Target)) { return; }
-    const float Damage = FMath::Max(0.f, Attack->GetState().DamageSnapshot - Target->GetNumericAttribute(UY01AttributeSet::GetArmorAttribute()));
-    const float HP = Y01Playground::Health(Target);
-    if (FMath::IsFinite(Damage) && Damage > 0 && HP > 0)
+    // 可吸血随技能配置（普攻/主动测试技能默认可吸血）；暴击沿用发射时判定的状态。
+    const bool bLifesteal = Attack->GetState().Config.bLifesteal;
+    // 共享伤害管线：基础 → ×暴击倍率 → 减甲(下限0) → 护盾吸收(仅玩家) → 扣血(不超当前)。
+    const auto Result = Y01DamagePipeline::Resolve(Source, Target, Attack->GetState().DamageSnapshot, Attack->GetState().bCritical);
+    if (Result.bValid && Result.HealthLoss > 0)
     {
-        if (auto* Spec = Parameters.GetOwningSpecForPreExecuteMod()) { Spec->SetSetByCallerMagnitude(Y01Tags::Data_DamageDisplay, Damage); }
-        Output.AddOutputModifier(FGameplayModifierEvaluatedData(UY01AttributeSet::GetHealthAttribute(), EGameplayModOp::Additive, -FMath::Min(Damage, HP)));
+        if (auto* Spec = Parameters.GetOwningSpecForPreExecuteMod())
+        {
+            Spec->SetSetByCallerMagnitude(Y01Tags::Data_DamageDisplay, Result.AfterArmor);
+            // 暴击标记与可吸血开关写入spec，供事件标记与吸血判定消费。
+            Spec->SetSetByCallerMagnitude(Y01Tags::Data_Crit, Result.bCritical ? 1.f : 0.f);
+            Spec->SetSetByCallerMagnitude(Y01Tags::Data_LifestealAllowed, bLifesteal ? 1.f : 0.f);
+        }
+        Output.AddOutputModifier(FGameplayModifierEvaluatedData(UY01AttributeSet::GetHealthAttribute(), EGameplayModOp::Additive, -Result.HealthLoss));
     }
 }
 AY01TestAttack::AY01TestAttack()
@@ -207,6 +226,8 @@ void AY01TestAttack::Initialize(UY01CombatAbilitySystem* ASC, const FY01GrantedS
 void AY01TestAttack::ActivateState(UY01CombatAbilitySystem* ASC)
 {
     Source = ASC; SourceSession = ASC->GetCombatSession();
+    // 暴击在发射/放置时判定一次（DamageSnapshot就绪后随状态激活），命中沿用。
+    State.bCritical = Y01DamagePipeline::RollCritical(ASC);
     State.Caster = ASC->GetAvatarActor(); State.Origin = State.Caster->GetActorLocation(); State.Position = State.Origin;
     State.StartedAt = GetWorld()->GetTimeSeconds();
     const double Lifetime = State.bAutoAttack && State.Config.Mode == EY01TestSkillMode::Projectile
@@ -237,6 +258,11 @@ void AY01TestAttack::ActivateState(UY01CombatAbilitySystem* ASC)
     }
     if (State.Config.Mode == EY01TestSkillMode::Area) { CheckArea(); }
     else { SweepBall(State.Position); }
+    // 普攻在守卫窗口内真正发动点：只计数不结算（计数点=发动，不按命中人数），由成长Tick统一结算。
+    if (State.bAutoAttack)
+    {
+        if (auto* P = Cast<AY01PlayerState>(ASC->GetOwner()); P && P->GetGrowth()) { P->GetGrowth()->NotifyBasicAttack(); }
+    }
 }
 bool AY01TestAttack::SourceValid() const
 {

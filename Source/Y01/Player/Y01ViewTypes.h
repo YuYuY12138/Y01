@@ -4,6 +4,7 @@
 #include "Player/Y01DropDeliveryComponent.h"
 #include "Combat/Y01Combat.h"
 #include "Net/Serialization/FastArraySerializer.h"
+#include "Player/Y01AttributeResolver.h"
 #include "Y01ViewTypes.generated.h"
 
 // 客户端只含显示值和请求身份，不含GA句柄、Ability类或服务器来源对象。
@@ -29,6 +30,7 @@ struct Y01_API FY01ViewItem
     UPROPERTY() uint64 AcquisitionOrder = 0;
     UPROPERTY() EY01ItemLocation Location = EY01ItemLocation::Backpack;
     UPROPERTY() int32 Slot = INDEX_NONE;
+    UPROPERTY() int32 Count = 1;
     UPROPERTY() FY01ViewDisplay Display;
     UPROPERTY() TArray<FY01ItemEffect> Effects;
     UPROPERTY() TArray<FY01ItemDamageEffect> DamageEffects;
@@ -87,6 +89,8 @@ struct Y01_API FY01CommittedView
     UPROPERTY() TArray<FGuid> EquipmentSlots;
     UPROPERTY() TArray<FY01ViewSkill> Skills;
     UPROPERTY() TArray<FY01ViewItem> Items;
+    // 本局已吞噬的红装快照，只读展示；新局随组件重建清空。
+    UPROPERTY() TArray<FY01ViewItem> Devoured;
     UPROPERTY() TArray<FY01ShopOfferState> ShopOffers;
     UPROPERTY() TArray<FY01SynthesisState> SynthesisRecipes;
     UPROPERTY() FY01TalentChoiceState TalentChoice;
@@ -95,6 +99,7 @@ struct Y01_API FY01CommittedView
     UPROPERTY() uint64 ResponseSerial = 0;
     UPROPERTY() FY01ViewReceipt Response;
     UPROPERTY() TArray<FY01ItemRequest> Tickets;
+    UPROPERTY() TArray<FY01AttributeBreakdown> AttributeBreakdowns;
 };
 USTRUCT()
 struct Y01_API FY01ViewChange
@@ -160,6 +165,8 @@ struct Y01_API FY01ViewOfferDelta
     UPROPERTY() FString SourceId;
     UPROPERTY() TArray<FY01ItemEffect> Effects;
     UPROPERTY() TArray<FY01ItemGrowth> Growth;
+    UPROPERTY() EY01TableKind ItemType = EY01TableKind::None;
+    UPROPERTY() TArray<FY01ShopOfferOdds> Odds;
 };
 USTRUCT()
 struct Y01_API FY01ViewDeltaCommit
@@ -197,6 +204,8 @@ struct Y01_API FY01ViewDeltaCommit
     UPROPERTY() TArray<FY01ViewRequestSlotDelta> Tickets;
     UPROPERTY() TArray<FY01ViewChange> Manifest;
     UPROPERTY() TArray<FY01ViewItem> ChangedItems;
+    UPROPERTY() TArray<FY01ViewItem> Devoured;
+    UPROPERTY() TArray<FY01AttributeBreakdown> AttributeBreakdowns;
 };
 USTRUCT()
 struct Y01_API FY01ViewAck

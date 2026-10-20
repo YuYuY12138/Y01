@@ -9,7 +9,7 @@
 UENUM()
 enum class EY01ItemLocation : uint8 { Backpack, EquipmentSlot };
 UENUM()
-enum class EY01ItemOperation : uint8 { Equip, Unequip, PrepareLearn, ConfirmLearn, CancelLearn, RemoveSkill, Purchase, Synthesize, ChooseTalent };
+enum class EY01ItemOperation : uint8 { Equip, Unequip, PrepareLearn, ConfirmLearn, CancelLearn, RemoveSkill, Purchase, Synthesize, ChooseTalent, Devour };
 UENUM()
 enum class EY01ItemChangeKind : uint8 { Added, Changed, Removed };
 UENUM()
@@ -67,6 +67,12 @@ struct Y01_API FY01ItemEffect
     UPROPERTY() EY01Attribute SourceAttribute = EY01Attribute::None;
     UPROPERTY() EY01Attribute TargetAttribute = EY01Attribute::None;
     UPROPERTY() double Amount = 0;
+    UPROPERTY() EY01EffectCondition Condition = EY01EffectCondition::None;
+    UPROPERTY() double ConditionThreshold = 0;
+    UPROPERTY() bool bGrowthContribution = false;
+    UPROPERTY() double DurationSeconds = 0;
+    UPROPERTY() double LayerCap = 0;
+    UPROPERTY() double IntervalSeconds = 0;
 };
 
 // 每实例独立拥有规则快照和累计账本；本子步不绑定成长触发器。
@@ -99,11 +105,22 @@ struct Y01_API FY01EffectiveKillGrowthLedger
     UPROPERTY() bool bEnded = false;
     UPROPERTY() uint64 AppliedKills = 0;
     UPROPERTY() double Strength = 0;
+    UPROPERTY() double Agility = 0;
+    UPROPERTY() double Wisdom = 0;
+    UPROPERTY() double MaxHealth = 0;
     UPROPERTY() TArray<FY01PlayerGrowthEntry> PlayerRules;
     UPROPERTY() FGuid LastKillEventId;
     UPROPERTY() FGuid FaultKillEventId;
     UPROPERTY() EY01ItemError GrowthFault = EY01ItemError::None;
     UPROPERTY() FString FaultMessage;
+};
+
+USTRUCT()
+struct Y01_API FY01ShopOfferOdds
+{
+    GENERATED_BODY()
+    UPROPERTY() EY01Quality Quality = EY01Quality::Green;
+    UPROPERTY() double Weight = 0;
 };
 
 // 商店自有静态快照与限购状态；只记录规则，本子步不触发成长。
@@ -116,6 +133,8 @@ struct Y01_API FY01ShopOfferState
     UPROPERTY() EY01ShopKind ShopKind = EY01ShopKind::RandomPool;
     UPROPERTY() int32 Price = 0;
     UPROPERTY() int32 Quantity = 1;
+    UPROPERTY() EY01TableKind ItemType = EY01TableKind::None;
+    UPROPERTY() TArray<FY01ShopOfferOdds> Odds;
     UPROPERTY() bool bPurchased = false;
     UPROPERTY() FString SourceKey;
     UPROPERTY() FString SourceId;
@@ -192,11 +211,15 @@ struct Y01_API FY01ItemInstance
     UPROPERTY() EY01ItemLocation Location = EY01ItemLocation::Backpack;
     UPROPERTY() int32 Slot = INDEX_NONE;
     UPROPERTY() uint64 EntityRevision = 1;
+    // 最近一次穿戴时的实体版本；此后槽内成长只推进EntityRevision。
+    UPROPERTY() uint64 PlacementRevision = 0;
     UPROPERTY() uint64 LastChangedRevision = 0;
     UPROPERTY() uint64 AcquisitionOrder = 0;
     UPROPERTY() FText DisplayName;
     UPROPERTY() EY01Quality Quality = EY01Quality::Green;
     UPROPERTY() TSoftObjectPtr<UTexture2D> Icon;
+    // 仅可叠加道具大于1；装备与技能书恒为1。
+    UPROPERTY() int32 Count = 1;
     UPROPERTY() FY01ItemSkill Skill;
     UPROPERTY() TArray<FY01ItemDamageEffect> DamageEffects;
     UPROPERTY() TArray<FY01ItemEffect> Effects;
@@ -246,5 +269,6 @@ struct Y01_API FY01LoadoutSnapshot
     UPROPERTY() TArray<FY01ItemInstance> Items;
     UPROPERTY() TArray<FGuid> EquipmentSlots;
     UPROPERTY() TArray<FY01LearnedSkill> Skills;
+    UPROPERTY() TArray<FY01ItemInstance> Devoured;
     UPROPERTY() uint64 ConfigRevision = 0;
 };

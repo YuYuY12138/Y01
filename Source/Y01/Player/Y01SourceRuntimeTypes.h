@@ -4,7 +4,7 @@
 
 class UY01SourceEffectsComponent;
 
-enum class EY01RuntimeSourceKind : uint8 { Base, Equipment, Skill, Talent, Shop };
+enum class EY01RuntimeSourceKind : uint8 { Base, Equipment, Skill, Talent, Shop, Devoured };
 enum class EY01RuntimeError : uint8
 {
     None, Authority, Session, Disabled, Stopped, Busy, Stale, InvalidReference, DuplicateEffect,
@@ -33,6 +33,22 @@ struct Y01_API FY01SourceEffectSnapshot
     EY01Attribute SourceAttribute = EY01Attribute::None;
     EY01Attribute TargetAttribute = EY01Attribute::None;
     double Amount = 0;
+    EY01EffectCondition Condition = EY01EffectCondition::None;
+    double ConditionThreshold = 0;
+    bool bGrowthContribution = false;
+    double DurationSeconds = 0;
+    double LayerCap = 0;
+    double IntervalSeconds = 0;
+};
+// 玩家成长四项合计；可从单一力量值隐式构造，保持既有单力量调用点（含测试）不变。
+struct Y01_API FY01PlayerGrowthTotals
+{
+    double Strength = 0, Agility = 0, Wisdom = 0, MaxHealth = 0;
+    FY01PlayerGrowthTotals() = default;
+    FY01PlayerGrowthTotals(double StrengthOnly) : Strength(StrengthOnly) {}
+    FY01PlayerGrowthTotals(double InStrength, double InAgility, double InWisdom, double InMaxHealth)
+        : Strength(InStrength), Agility(InAgility), Wisdom(InWisdom), MaxHealth(InMaxHealth) {}
+    bool operator==(const FY01PlayerGrowthTotals&) const = default;
 };
 enum class EY01IncomePhase : uint8 { Disabled, Waiting, Running, Stopped, Fault };
 enum class EY01IncomeEntryKind : uint8 { Natural, Spending };
@@ -94,6 +110,12 @@ struct Y01_API FY01ResolvedSourceEffect
     EY01Attribute SourceAttribute = EY01Attribute::None;
     EY01Attribute TargetAttribute = EY01Attribute::None;
     double Amount = 0;
+    EY01EffectCondition Condition = EY01EffectCondition::None;
+    double ConditionThreshold = 0;
+    bool bGrowthContribution = false;
+    double DurationSeconds = 0;
+    double LayerCap = 0;
+    double IntervalSeconds = 0;
 };
 struct Y01_API FY01ResolvedSource
 {
@@ -105,7 +127,7 @@ class Y01_API FY01PreparedMutation
 {
     friend class UY01SourceEffectsComponent;
     friend class UY01GrowthComponent;
-    TOptional<double> PlayerStrength;
+    TOptional<FY01PlayerGrowthTotals> PlayerGrowth;
     TWeakObjectPtr<UY01SourceEffectsComponent> Owner;
     FGuid Match;
     int32 JoinSequence = 0;

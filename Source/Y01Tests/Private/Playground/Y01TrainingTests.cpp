@@ -89,7 +89,8 @@ void FY01TrainingTest::GetTests(TArray<FString>& Names, TArray<FString>& Command
         TEXT("InvalidIdentity"), TEXT("BadIntervalZero"), TEXT("BadIntervalNegative"), TEXT("BadIntervalNaN"),
         TEXT("BadIntervalInfinity"), TEXT("BadCapZero"), TEXT("BadCapNegative"), TEXT("BadCapHuge"),
         TEXT("UnsupportedRewardItems"), TEXT("WorldFloorAndWalls"), TEXT("CanvasButtons"), TEXT("TrainingOwnerOnly"),
-        TEXT("CanvasSkillDefault"), TEXT("CanvasSkillToggle"), TEXT("CanvasSkillLayout"), TEXT("CanvasSkillDrawBounds"), TEXT("CanvasSkillScaled") })
+        TEXT("CanvasSkillDefault"), TEXT("CanvasSkillToggle"), TEXT("CanvasSkillLayout"), TEXT("CanvasSkillDrawBounds"), TEXT("CanvasSkillScaled"),
+        TEXT("FirstBatchWaitsInterval") })
     { Names.Add(Name); Commands.Add(Name); }
 }
 bool FY01TrainingTest::RunTest(const FString& Case)
@@ -240,6 +241,23 @@ bool FY01TrainingTest::RunTest(const FString& Case)
             { return P.RepIndex == Prop->RepIndex && P.Condition == COND_OwnerOnly; })); return true;
     }
     const FVector Origin = Pawn->GetActorLocation();
+    if (Case == TEXT("FirstBatchWaitsInterval"))
+    {
+        Rooms->bImmediateFirstBatchForTest = false;
+        TestTrue(TEXT("入房成功"), Rooms->Request(F.A, true));
+        TestEqual(TEXT("入房不立即刷怪"), Rooms->Observe(PS).Alive, 0);
+        TestEqual(TEXT("首批倒计时为一个生成间隔"), Rooms->Observe(PS).NextBatchAt, F.World->GetTimeSeconds() + 3.);
+        F.Tick(2.9f); TestEqual(TEXT("间隔未到仍无怪"), Rooms->Monsters(PS).Num(), 0);
+        F.Tick(0.2f); TestEqual(TEXT("满一个间隔刷首批"), Rooms->Monsters(PS).Num(), 2);
+        F.Tick(3.f); TestEqual(TEXT("此后按正常间隔"), Rooms->Monsters(PS).Num(), 4);
+        // 首批未到时离开再进：旧会话定时器必须取消，新会话从头计时。
+        Rooms->Request(F.A, false); TestTrue(TEXT("重入"), Rooms->Request(F.A, true)); F.Tick(1.f);
+        Rooms->Request(F.A, false); TestTrue(TEXT("再次重入"), Rooms->Request(F.A, true));
+        F.Tick(2.5f); TestEqual(TEXT("旧会话首批计时不叠加到新会话"), Rooms->Monsters(PS).Num(), 0);
+        F.Tick(0.6f); TestEqual(TEXT("新会话满间隔只刷一批"), Rooms->Monsters(PS).Num(), 2);
+        TestEqual(TEXT("重入回首阶段"), Rooms->Observe(PS).Stage, 1);
+        return true;
+    }
     if (!TestTrue(TEXT("A进入立即成功"), Rooms->Request(F.A, true))) { return false; }
     if (Case == TEXT("DelayedSpawnCancelled"))
     {
@@ -346,7 +364,7 @@ bool FY01TrainingTest::RunTest(const FString& Case)
     TestEqual(TEXT("离区和结束后没有残留怪或待刷"), Rooms->Monsters(PS).Num(), 0);
     if (Case == TEXT("ExitStopsAndReenterResets"))
     {
-        TestTrue(TEXT("返回原地点"), FVector::Dist2D(Origin, Pawn->GetActorLocation()) < 1);
+        TestTrue(TEXT("无核心且无出生点时才退回入房前位置"), FVector::Dist2D(Origin, Pawn->GetActorLocation()) < 1);
         TestTrue(TEXT("再次进入"), Rooms->Request(F.A, true)); TestEqual(TEXT("立即首批"), Rooms->Observe(PS).Alive, 2);
         TestEqual(TEXT("首阶段"), Rooms->Observe(PS).Stage, 1);
     }

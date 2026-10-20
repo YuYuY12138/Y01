@@ -292,10 +292,11 @@ FString Y01R36Trace::PanelRecord(const UY01R36Panel* Panel)
     J->SetBoolField(TEXT("confirmation"), M.NeedsConfirmation()); J->SetNumberField(TEXT("serverTime"), Panel->GetServerTime());
     J->SetNumberField(TEXT("offset"), Bag->GetScrollOffset());
     J->SetBoolField(TEXT("canDrag"), Panel->CanDrag());
-    J->SetBoolField(TEXT("selectingMaterials"), Panel->IsSelectingMaterials());
-    J->SetNumberField(TEXT("materials"), M.Materials().Num());
     J->SetNumberField(TEXT("unseenArrivals"), M.UnseenArrivals());
-    J->SetBoolField(TEXT("flightsEnabled"), Panel->AreFlightsEnabled());
+    J->SetNumberField(TEXT("logRevision"), M.GetLogRevision());
+    TArray<TSharedPtr<FJsonValue>> LogLines;
+    for (const auto& Entry : M.GameLog()) { LogLines.Add(MakeShared<FJsonValueString>(Entry.ToString())); }
+    J->SetArrayField(TEXT("gameLog"), LogLines);
     J->SetBoolField(TEXT("characterExpanded"), Panel->IsCharacterExpanded());
     J->SetBoolField(TEXT("backpackExpanded"), Panel->IsBackpackExpanded());
     J->SetBoolField(TEXT("shopExpanded"), Panel->IsShopExpanded());
@@ -386,7 +387,6 @@ FString Y01R36Trace::PanelRecord(const UY01R36Panel* Panel)
             Row->SetStringField(TEXT("definition"), I->Definition.RowName.ToString()); Row->SetNumberField(TEXT("order"), I->AcquisitionOrder);
             Row->SetNumberField(TEXT("quality"), static_cast<int32>(I->Display.Quality));
             Row->SetNumberField(TEXT("skillType"), static_cast<int32>(I->Display.SkillType));
-            Row->SetBoolField(TEXT("selected"), M.Materials().ContainsByPredicate([&](const auto& S) { return S.ItemId == I->ItemId; }));
             EffectFields(*Row, I->Effects);
         }
         if (C->GetZone() == EY01R36Zone::Skill && M.View().Skills.IsValidIndex(C->GetSlotIndex()))
@@ -419,8 +419,9 @@ FString Y01R36Trace::PanelRecord(const UY01R36Panel* Panel)
     }
     J->SetArrayField(TEXT("flightGlyphs"), Glyphs);
     for (const auto* Name : { TEXT("ToggleCharacter"), TEXT("ToggleBackpack"), TEXT("ToggleShop"), TEXT("CharacterPanel"), TEXT("BackpackPanel"), TEXT("ShopPanel"),
-        TEXT("TopVitals"), TEXT("WaveCountdown"), TEXT("BackpackHint"), TEXT("AttributeList"), TEXT("Confirmation"), TEXT("Status"),
-        TEXT("ToggleFlights"), TEXT("Confirm"), TEXT("Cancel"), TEXT("Training"), TEXT("MaterialMode"), TEXT("Synthesize"), TEXT("ShopList"), TEXT("TalentList") })
+        TEXT("TopVitals"), TEXT("HealthBar"), TEXT("ShieldBar"), TEXT("HealthText"), TEXT("WaveCountdown"), TEXT("BackpackHint"), TEXT("AttributeList"),
+        TEXT("GrowthSummary"), TEXT("GameLog"), TEXT("Confirmation"), TEXT("Status"),
+        TEXT("Confirm"), TEXT("Cancel"), TEXT("Training"), TEXT("Synthesize"), TEXT("ShopList"), TEXT("TalentList") })
     { if (auto* W = Panel->WidgetTree->FindWidget(FName(Name))) { J->SetObjectField(Name, Geometry(W)); } }
     Panel->WidgetTree->ForEachWidget([&](UWidget* W)
     { if (W->GetName().StartsWith(TEXT("StatRow_")) || W->GetName().StartsWith(TEXT("StatLabel_")) || W->GetName().StartsWith(TEXT("StatValue_")))
@@ -644,18 +645,7 @@ void TickTransactionTiming(AY01R36Controller* PC)
         Ready = Item && Model.Drag(Equip ? EY01R36Zone::Backpack : EY01R36Zone::Equipment, Item->ItemId, 0, Drag)
             && Model.Drop(Drag, Equip ? EY01R36Zone::Equipment : EY01R36Zone::Backpack, 0, Phase, Request);
     }
-    else
-    {
-        for (const auto& Recipe : View.SynthesisRecipes)
-        {
-            TArray<FGuid> Materials;
-            for (const auto& I : View.Items)
-            { if (I.Location == EY01ItemLocation::Backpack && I.Definition.Type == Recipe.Recipe.InputType && I.Display.Quality == Recipe.Recipe.InputQuality) { Materials.Add(I.ItemId); } }
-            if (Materials.Num() < 5) { continue; }
-            for (int32 I = 0; I < 5; ++I) { Model.ToggleMaterial(Materials[I], Phase); }
-            Ready = Model.Synthesize(Phase, Request); break;
-        }
-    }
+    else { Ready = Model.Synthesize(Phase, Request); }
     if (!Ready) { Failed = true; UE_LOG(LogTemp, Display, TEXT("R36Short FAIL NoIntent Step=%d Items=%d Gold=%d"), Step, View.Items.Num(), View.Gold); return; }
     BeforeItems = View.Items.Num(); Pending = Request; Sent = FPlatformTime::Seconds();
     Model.Sent(Request); Y01ViewTiming::Mark(TEXT("REQUEST_SENT"), Y01ViewTiming::Scope(View), 0, 0, Request.Seq, View.Items.Num());

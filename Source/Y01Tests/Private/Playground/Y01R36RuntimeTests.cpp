@@ -98,7 +98,9 @@ IMPLEMENT_COMPLEX_AUTOMATION_TEST(FY01R36EffectsTest, "Y01.Framework.R36.Effects
 void FY01R36EffectsTest::GetTests(TArray<FString>& Names, TArray<FString>& Commands) const
 {
     for (const TCHAR* N : { TEXT("DefaultDisabled"), TEXT("SharedIndependent"), TEXT("RepeatPayload"), TEXT("ChangedPayload"),
-        TEXT("MultipleEffects"), TEXT("SecondGEFailure"), TEXT("StageRollback"), TEXT("StageCommit"), TEXT("StalePlan"),
+        TEXT("Payload.Condition"), TEXT("Payload.Threshold"), TEXT("Payload.Growth"),
+        TEXT("Cache.Rollback"), TEXT("Cache.BaseRefresh"), TEXT("Cache.ConditionRefresh"),
+        TEXT("MultipleEffects"), TEXT("DerivedGEFailure"), TEXT("StageRollback"), TEXT("StageCommit"), TEXT("StalePlan"),
         TEXT("ForeignPlan"), TEXT("ForeignTransaction"), TEXT("SortAndIdentity"), TEXT("SnapshotDuringStage"),
         TEXT("Reentry.Apply"), TEXT("Reentry.Attribute"), TEXT("Reentry.Remove"), TEXT("Reentry.Stop"), TEXT("Reentry.Initialize"),
         TEXT("DetachedHandle"), TEXT("ClientInitialize"), TEXT("ClientMutation"), TEXT("SessionIdentity"), TEXT("MultiPlayer"),
@@ -138,7 +140,7 @@ bool FY01R36EffectsTest::RunTest(const FString& Case)
     {
         TestNotNull(TEXT("生产来源组件挂PlayerState"), F.S()); TestNotNull(TEXT("生产收入组件挂PlayerState"), F.I());
         TestFalse(TEXT("默认来源不激活"), F.S()->IsActive()); TestFalse(TEXT("默认收入不激活"), F.I()->IsActive());
-        TestFalse(TEXT("来源不Tick"), F.S()->PrimaryComponentTick.bCanEverTick); TestFalse(TEXT("收入不Tick"), F.I()->PrimaryComponentTick.bCanEverTick);
+        TestFalse(TEXT("来源不Tick"), F.S()->IsComponentTickEnabled()); TestFalse(TEXT("收入不Tick"), F.I()->PrimaryComponentTick.bCanEverTick);
         F.Now = 10; Bad(TEXT("未初始化不能开始"), F.I()->Start());
         TestEqual(TEXT("默认无金币副作用"), F.P->GetGold(), 0); TestEqual(TEXT("默认无GAS副作用"), F.Attack(), 30.f); return true;
     }
@@ -170,7 +172,125 @@ bool FY01R36EffectsTest::RunTest(const FString& Case)
         Ok(TEXT("基础收入来源"), F.Add(TEXT("Income"), F.Refs({TEXT("R")}), ESource::Base)); Ok(TEXT("正式启动"), F.I()->Start());
         F.Now = .5; Ok(TEXT("分段公式"), F.I()->Settle()); TestEqual(TEXT("0.25+0.5*1.5入账1"), F.P->GetGold(), 1); TestEqual(TEXT("余量0"), F.Income().State.Remainder, 0.); return true;
     }
+    if (Case == TEXT("Cache.ConditionRefresh"))
+    {
+        F.ASC()->SetNumericAttributeBase(UY01AttributeSet::GetMaxHealthAttribute(), 100);
+        F.ASC()->SetNumericAttributeBase(UY01AttributeSet::GetHealthAttribute(), 100);
+    }
     if (!Ok(TEXT("显式服务器初始化"), F.Init(InitialRemainder))) { return false; }
+    if (Case.StartsWith(TEXT("Cache.")))
+    {
+        FY01ResolvedAttributes Initial;
+        if (!Ok(TEXT("初始化缓存可读"), F.S()->ObserveAttributes(Initial))) { return false; }
+        TestEqual(TEXT("缓存使用实际基础攻击"), Initial.Stats.AttackDamage, 30.f);
+        TestEqual(TEXT("空来源初始化无攻击加值"), Initial.AttackBonus, 0.);
+        TestTrue(TEXT("初始化GoldGain无基础贡献"), Initial.Breakdowns[int32(EY01Attribute::GoldGain) - 1].Contributions.IsEmpty());
+        const bool Conditional = Case == TEXT("Cache.ConditionRefresh");
+        if (Conditional)
+        {
+            FY01SourceEffectRow Row; Row.Kind = EEffect::AttributeFlat; Row.TargetAttribute = EY01Attribute::Armor;
+            Row.Condition = EY01EffectCondition::HealthBelow; Row.ConditionThreshold = 50;
+            F.Data.Add(EY01TableKind::SourceEffect, Row, TEXT("Conditional"));
+            if (!Ok(TEXT("零幅度条件来源"), F.Add(TEXT("Old"), F.Refs({TEXT("Conditional")})))) { return false; }
+        }
+        else if (!Ok(TEXT("旧缓存来源"), F.Add(TEXT("Old"), F.Refs({TEXT("A"), TEXT("R")})))) { return false; }
+        FY01ResolvedAttributes BeforeCache; FY01SourceSnapshot Before;
+        Ok(TEXT("读取完整旧缓存"), F.S()->ObserveAttributes(BeforeCache)); Ok(TEXT("读取旧版本"), F.S()->Observe(Before));
+        const auto OldHandles = F.ASC()->GetActiveEffects(FGameplayEffectQuery());
+        TArray<FY01ResolvedSource> Adds;
+        if (Case == TEXT("Cache.Rollback")) { Adds.Add({ESource::Equipment, TEXT("New"), {{TEXT("Attack"), EEffect::AttackFlat, 7}}}); }
+        else if (Conditional) { F.ASC()->SetNumericAttributeBase(UY01AttributeSet::GetHealthAttribute(), 25); }
+        else { F.ASC()->SetNumericAttributeBase(UY01AttributeSet::GetAttackDamageAttribute(), 5); }
+        FY01PreparedMutation Plan; FY01SourceTransaction Tx;
+        if (!Ok(TEXT("缓存事务预检"), F.S()->PrepareMutation(Adds, {}, Plan))
+            || !Ok(TEXT("缓存事务暂存"), F.S()->StageMutation(Plan, Tx))) { return false; }
+        FY01ResolvedAttributes Hidden; Hidden.AttackBonus = 99;
+        TestEqual(TEXT("暂存拒绝缓存读取"), F.S()->ObserveAttributes(Hidden).Code, EError::Busy);
+        TestTrue(TEXT("Busy不泄漏部分明细"), Hidden.Breakdowns.IsEmpty()); TestEqual(TEXT("Busy清空输出"), Hidden.AttackBonus, 0.);
+        if (Case == TEXT("Cache.Rollback"))
+        {
+            Ok(TEXT("回滚暂存缓存"), F.S()->RollbackMutation(Tx));
+            FY01ResolvedAttributes AfterCache; FY01SourceSnapshot After;
+            Ok(TEXT("回滚缓存可读"), F.S()->ObserveAttributes(AfterCache)); Ok(TEXT("回滚版本可读"), F.S()->Observe(After));
+            TestEqual(TEXT("回滚版本不动"), After.Revision, Before.Revision);
+            TestEqual(TEXT("回滚缓存加值不动"), AfterCache.AttackBonus, BeforeCache.AttackBonus);
+            TestEqual(TEXT("回滚缓存收入不动"), AfterCache.GoldPerSecond, BeforeCache.GoldPerSecond);
+            TestEqual(TEXT("回滚缓存金币获取不动"), AfterCache.GoldGainPercent, BeforeCache.GoldGainPercent);
+            TestTrue(TEXT("回滚缓存Stats完整"), FY01UnitCombatStats::StaticStruct()->CompareScriptStruct(&AfterCache.Stats, &BeforeCache.Stats, 0));
+            TestEqual(TEXT("回滚缓存行数不动"), AfterCache.Breakdowns.Num(), BeforeCache.Breakdowns.Num());
+            for (int32 I = 0; I < FMath::Min(AfterCache.Breakdowns.Num(), BeforeCache.Breakdowns.Num()); ++I)
+            { TestTrue(TEXT("回滚缓存逐行完全相同"), FY01AttributeBreakdown::StaticStruct()->CompareScriptStruct(&AfterCache.Breakdowns[I], &BeforeCache.Breakdowns[I], 0)); }
+            TestTrue(TEXT("回滚保留精确旧GE集合"), F.ASC()->GetActiveEffects(FGameplayEffectQuery()) == OldHandles);
+            TestEqual(TEXT("回滚真实攻击35"), F.Attack(), 35.f);
+        }
+        else
+        {
+            Ok(TEXT("无来源增删仍提交解析变化"), F.S()->CommitMutation(Tx));
+            FY01ResolvedAttributes AfterCache; FY01SourceSnapshot After;
+            Ok(TEXT("新缓存可读"), F.S()->ObserveAttributes(AfterCache)); Ok(TEXT("新版本可读"), F.S()->Observe(After));
+            TestEqual(TEXT("解析变化推进版本"), After.Revision, Before.Revision + 1);
+            TestEqual(TEXT("逻辑效果数量不变"), After.Effects.Num(), Before.Effects.Num());
+            TestTrue(TEXT("未改变攻击加值不重建GE"), F.ASC()->GetActiveEffects(FGameplayEffectQuery()) == OldHandles);
+            if (Conditional)
+            {
+                const auto& OldRow = BeforeCache.Breakdowns[int32(EY01Attribute::Armor) - 1];
+                const auto& NewRow = AfterCache.Breakdowns[int32(EY01Attribute::Armor) - 1];
+                TestFalse(TEXT("满生命条件未激活"), OldRow.Contributions.Last().bActive);
+                TestTrue(TEXT("条件标志变化纳入提交缓存"), NewRow.Contributions.Last().bActive);
+                TestEqual(TEXT("零幅度条件数值不变"), NewRow.Final, OldRow.Final);
+            }
+            else { TestEqual(TEXT("缓存重读动态base"), AfterCache.Stats.AttackDamage, 10.f); TestEqual(TEXT("真实ASC攻击10"), F.Attack(), 10.f); }
+        }
+        return true;
+    }
+    if (Case.StartsWith(TEXT("Payload.")))
+    {
+        FY01ResolvedSource Source; Source.Kind = ESource::Equipment; Source.LocalKey = TEXT("Payload");
+        FY01ResolvedSourceEffect Effect; Effect.EffectId = TEXT("PayloadEffect");
+        FY01PreparedMutation Mutation; FY01SourceTransaction Tx;
+        if (Case == TEXT("Payload.Growth"))
+        {
+            Effect.Magnitude = 5; Effect.bGrowthContribution = true; Source.Effects.Add(Effect);
+            if (!Ok(TEXT("成长载荷预检"), F.S()->PrepareMutation({Source}, {}, Mutation))
+                || !Ok(TEXT("成长载荷暂存"), F.S()->StageMutation(Mutation, Tx))
+                || !Ok(TEXT("成长载荷提交"), F.S()->CommitMutation(Tx))) { return false; }
+        }
+        else
+        {
+            Effect.Kind = EEffect::AttributeFlat; Effect.TargetAttribute = EY01Attribute::Armor;
+            Effect.Condition = EY01EffectCondition::HealthBelow; Effect.ConditionThreshold = 25;
+            FY01SourceEffectRow Row; Row.Kind = Effect.Kind; Row.TargetAttribute = Effect.TargetAttribute;
+            Row.Condition = Effect.Condition; Row.ConditionThreshold = Effect.ConditionThreshold;
+            F.Data.Add(EY01TableKind::SourceEffect, Row, Effect.EffectId); Source.Effects.Add(Effect);
+            if (!Ok(TEXT("目录条件来源完整提交"), F.Add(Source.LocalKey, F.Refs({TEXT("PayloadEffect")})))) { return false; }
+        }
+        FY01SourceSnapshot Before;
+        if (!Ok(TEXT("完整载荷快照"), F.S()->Observe(Before))) { return false; }
+        const auto* Actual = Before.Effects.FindByPredicate([&](const auto& E) { return E.Source.LocalKey == Source.LocalKey; });
+        if (!TestNotNull(TEXT("精确来源载荷存在"), Actual)) { return false; }
+        TestEqual(TEXT("条件完整复制"), Actual->Condition, Effect.Condition);
+        TestEqual(TEXT("阈值完整复制"), Actual->ConditionThreshold, Effect.ConditionThreshold);
+        TestEqual(TEXT("成长来源标志完整复制"), Actual->bGrowthContribution, Effect.bGrowthContribution);
+        if (!Ok(TEXT("相同完整载荷幂等"), F.S()->PrepareMutation({Source}, {}, Mutation))
+            || !Ok(TEXT("幂等载荷暂存"), F.S()->StageMutation(Mutation, Tx))
+            || !Ok(TEXT("幂等载荷提交"), F.S()->CommitMutation(Tx))) { return false; }
+        if (Case == TEXT("Payload.Condition")) { Source.Effects[0].Condition = EY01EffectCondition::HealthAbove; }
+        else if (Case == TEXT("Payload.Threshold")) { Source.Effects[0].ConditionThreshold = 50; }
+        else { Source.Effects[0].bGrowthContribution = false; }
+        TestEqual(TEXT("任一新增字段改变必须报告载荷冲突"), F.S()->PrepareMutation({Source}, {}, Mutation).Code, EError::PayloadConflict);
+        if (Case != TEXT("Payload.Growth"))
+        {
+            auto& Row = F.Data.Row<FY01SourceEffectRow>(EY01TableKind::SourceEffect, Effect.EffectId);
+            Row.Condition = Source.Effects[0].Condition; Row.ConditionThreshold = Source.Effects[0].ConditionThreshold;
+            FY01PreparedSource Plan;
+            TestEqual(TEXT("目录入口同来源也拒绝新增字段冲突"), F.Prepare(Plan, Source.LocalKey, F.Refs({TEXT("PayloadEffect")})).Code, EError::PayloadConflict);
+        }
+        FY01SourceSnapshot After;
+        if (!Ok(TEXT("冲突后仍可观察"), F.S()->Observe(After))) { return false; }
+        TestEqual(TEXT("冲突及幂等不推进来源版本"), After.Revision, Before.Revision);
+        TestEqual(TEXT("冲突不改变真实攻击"), After.CurrentAttack, Before.CurrentAttack);
+        return true;
+    }
     if (Case.StartsWith(TEXT("Regression.")))
     {
         if (Case == TEXT("Regression.RemovePrecisionRollback") || Case == TEXT("Regression.SourceOrder"))
@@ -494,11 +614,11 @@ bool FY01R36EffectsTest::RunTest(const FString& Case)
     { Ok(TEXT("重复source幂等且输入顺序无关"), F.Add(TEXT("E01"), F.Refs({TEXT("R"), TEXT("A")}))); TestEqual(TEXT("重复不多加"), F.Attack(), 35.f); TestEqual(TEXT("重复不多GE"), F.ASC()->GetActiveEffects(FGameplayEffectQuery()).Num(), 1); return true; }
     if (Case == TEXT("DetachedHandle"))
     { F.ASC()->RemoveActiveGameplayEffect(Handles[0]); Bad(TEXT("失效句柄明确拒绝"), F.S()->RemoveSource(ESource::Equipment, TEXT("E01"))); return true; }
-    if (Case == TEXT("SecondGEFailure") || Case.StartsWith(TEXT("Reentry.")))
+    if (Case == TEXT("DerivedGEFailure") || Case.StartsWith(TEXT("Reentry.")))
     {
         int Calls = 0; FDelegateHandle H; FY01RuntimeResult Nested;
-        if (Case == TEXT("SecondGEFailure"))
-        { F.ASC()->GameplayEffectApplicationQueries.Add(FGameplayEffectApplicationQuery::CreateLambda([&](const FActiveGameplayEffectsContainer&, const FGameplayEffectSpec&) { return ++Calls != 2; })); }
+        if (Case == TEXT("DerivedGEFailure"))
+        { F.ASC()->GameplayEffectApplicationQueries.Add(FGameplayEffectApplicationQuery::CreateLambda([&](const FActiveGameplayEffectsContainer&, const FGameplayEffectSpec&) { ++Calls; return false; })); }
         auto Reenter = [&]()
         {
             if (++Calls != 1) { return; }
@@ -517,13 +637,19 @@ bool FY01R36EffectsTest::RunTest(const FString& Case)
         else { F.ASC()->OnGameplayEffectAppliedDelegateToSelf.Remove(H); }
         F.ASC()->GameplayEffectApplicationQueries.Reset();
         Bad(TEXT("失败或回调重入整次回滚"), R); TestTrue(TEXT("真实GAS回调确实执行"), Calls > 0);
-        if (Case == TEXT("SecondGEFailure")) { TestEqual(TEXT("真实第二次GE应用查询拒绝"), Calls, 2); }
+        if (Case == TEXT("DerivedGEFailure")) { TestEqual(TEXT("真实汇总GE首次查询拒绝"), Calls, 1); }
         TestEqual(TEXT("旧来源真实攻击保持"), F.Attack(), 35.f); TestEqual(TEXT("旧来源速率保持"), F.Income().State.Rate, 1.);
         TestNotNull(TEXT("精确旧handle保留"), F.ASC()->GetActiveGameplayEffect(Handles[0]));
         TestEqual(TEXT("没有残留半份GE"), F.ASC()->GetActiveEffects(FGameplayEffectQuery()).Num(), 1); return true;
     }
     if (Case == TEXT("MultipleEffects"))
-    { Ok(TEXT("一source多攻击与收入"), F.Add(TEXT("E02"), F.Refs({TEXT("A"), TEXT("B"), TEXT("R")}))); TestEqual(TEXT("真实最终47"), F.Attack(), 47.f); TestEqual(TEXT("收入合计2"), F.Income().State.Rate, 2.); return true; }
+    {
+        Ok(TEXT("一source多攻击与收入"), F.Add(TEXT("E02"), F.Refs({TEXT("A"), TEXT("B"), TEXT("R")})));
+        TestEqual(TEXT("真实最终47"), F.Attack(), 47.f); TestEqual(TEXT("收入合计2"), F.Income().State.Rate, 2.);
+        TestEqual(TEXT("所有来源攻击只用一个GE"), F.ASC()->GetActiveEffects(FGameplayEffectQuery()).Num(), 1);
+        FY01SourceSnapshot View; Ok(TEXT("多逻辑效果快照"), F.S()->Observe(View));
+        TestEqual(TEXT("一个GE仍保留五条逻辑效果"), View.Effects.Num(), 5); return true;
+    }
     AddError(TEXT("未覆盖的R36运行时测试分支：") + Case); return false;
 }
 IMPLEMENT_COMPLEX_AUTOMATION_TEST(FY01R36MutationTest, "Y01.Framework.R36.Effects.Mutation",
@@ -531,8 +657,8 @@ IMPLEMENT_COMPLEX_AUTOMATION_TEST(FY01R36MutationTest, "Y01.Framework.R36.Effect
 void FY01R36MutationTest::GetTests(TArray<FString>& Names, TArray<FString>& Commands) const
 {
     for (const TCHAR* N : { TEXT("ExchangeTwo"), TEXT("ReplaceSameKey"), TEXT("FinalNotTransientOverflow"),
-        TEXT("RollbackExact"), TEXT("SecondQueryRejected"), TEXT("LostOldBefore"), TEXT("LostOldStaged"),
-        TEXT("LostFirstNew"), TEXT("LostSecondNew"), TEXT("DuplicateRemove"), TEXT("DuplicateAdd"),
+        TEXT("RollbackExact"), TEXT("DerivedQueryRejected"), TEXT("LostOldBefore"), TEXT("LostOldStaged"),
+        TEXT("LostDerivedNew"), TEXT("DuplicateRemove"), TEXT("DuplicateAdd"),
         TEXT("DuplicateEffect"), TEXT("InvalidIdentity"), TEXT("ForeignRemoval"), TEXT("ForeignPlan"),
         TEXT("ForeignTransaction"), TEXT("Session"), TEXT("StaleRevision"), TEXT("Replay"), TEXT("SnapshotOwned"),
         TEXT("ScopeRollback"), TEXT("ScopeCommit"), TEXT("ScopeWeakOwner"), TEXT("StageBusy"),
@@ -604,13 +730,27 @@ bool FY01R36MutationTest::RunTest(const FString& Case)
         return Result;
     };
     const auto BeforeMods = Mods();
-    auto UnchangedMods = [&]()
+    auto UnchangedMods = [&](bool bRestored = false)
     {
         const auto AfterMods = Mods(); TestEqual(TEXT("modifier数量保持"), AfterMods.Num(), BeforeMods.Num());
+        auto ExternalOrder = [&](const TArray<FAggregatorMod>& Values)
+        {
+            TArray<FActiveGameplayEffectHandle> Result;
+            for (const auto& Mod : Values)
+            {
+                const auto* Active = F.ASC()->GetActiveGameplayEffect(Mod.ActiveHandle);
+                if (Active && Active->Spec.GetContext().GetSourceObject() != F.S()) { Result.Add(Mod.ActiveHandle); }
+            }
+            return Result;
+        };
+        TestTrue(TEXT("外部modifier相对顺序完整保留"), ExternalOrder(AfterMods) == ExternalOrder(BeforeMods));
         for (int32 I = 0; I < FMath::Min(AfterMods.Num(), BeforeMods.Num()); ++I)
         {
-            const auto& A = AfterMods[I]; const auto& B = BeforeMods[I];
-            TestEqual(TEXT("modifier原handle与相对顺序"), A.ActiveHandle, B.ActiveHandle);
+            const auto& B = BeforeMods[I];
+            const auto* Found = AfterMods.FindByPredicate([&](const auto& Mod) { return Mod.ActiveHandle == B.ActiveHandle; });
+            if (!TestNotNull(TEXT("modifier精确原handle保留"), Found)) { continue; }
+            const auto& A = *Found;
+            if (!bRestored) { TestEqual(TEXT("预检不改变任何modifier顺序"), AfterMods[I].ActiveHandle, B.ActiveHandle); }
             TestEqual(TEXT("预检/回滚不污染原modifier资格"), A.Qualifies(), B.Qualifies());
             TestEqual(TEXT("modifier幅度"), A.EvaluatedMagnitude, B.EvaluatedMagnitude);
             TestEqual(TEXT("modifier叠层字段"), A.StackCount, B.StackCount);
@@ -648,7 +788,7 @@ bool FY01R36MutationTest::RunTest(const FString& Case)
             if (TestNotNull(TEXT("原始handle原样恢复而非重建"), GE))
             { TestFalse(TEXT("原资格恢复"), GE->bIsInhibited); TestEqual(TEXT("原叠层"), GE->Spec.GetStackCount(), Case == TEXT("ExternalState") && H == External ? 3 : 1); }
         }
-        if (Case == TEXT("ExternalState")) { UnchangedMods(); }
+        if (Case == TEXT("ExternalState")) { UnchangedMods(true); }
     };
     if (Case == TEXT("DuplicateRemove") || Case == TEXT("DuplicateAdd") || Case == TEXT("DuplicateEffect")
         || Case == TEXT("InvalidIdentity") || Case == TEXT("ForeignRemoval"))
@@ -708,16 +848,16 @@ bool FY01R36MutationTest::RunTest(const FString& Case)
     { ApplyHook = F.ASC()->OnGameplayEffectAppliedDelegateToSelf.AddLambda([&](UAbilitySystemComponent*, const FGameplayEffectSpec&, FActiveGameplayEffectHandle) { Callback(); }); }
     if (Case.Contains(TEXT("Delete")) || Case == TEXT("Stop.Rollback"))
     { RemoveHook = F.ASC()->OnAnyGameplayEffectRemovedDelegate().AddLambda([&](const FActiveGameplayEffect&) { Callback(); }); }
-    if (Case == TEXT("SecondQueryRejected"))
-    { F.ASC()->GameplayEffectApplicationQueries.Add(FGameplayEffectApplicationQuery::CreateLambda([&](const FActiveGameplayEffectsContainer&, const FGameplayEffectSpec&) { return ++Calls != 2; })); }
+    if (Case == TEXT("DerivedQueryRejected"))
+    { F.ASC()->GameplayEffectApplicationQueries.Add(FGameplayEffectApplicationQuery::CreateLambda([&](const FActiveGameplayEffectsContainer&, const FGameplayEffectSpec&) { ++Calls; return false; })); }
     F.Now = 1.25;
     const auto Stage = F.S()->StageMutation(Plan, Tx);
-    const bool StageFails = Case.EndsWith(TEXT("Inhibit")) || Case.EndsWith(TEXT("Apply")) || Case == TEXT("SecondQueryRejected");
+    const bool StageFails = Case.EndsWith(TEXT("Inhibit")) || Case.EndsWith(TEXT("Apply")) || Case == TEXT("DerivedQueryRejected");
     if (StageFails)
     {
-        Code(TEXT("真实GAS批量中断"), Stage, Case == TEXT("SecondQueryRejected") ? EError::EffectRejected : EError::Interrupted);
+        Code(TEXT("真实GAS批量中断"), Stage, Case == TEXT("DerivedQueryRejected") ? EError::EffectRejected : EError::Interrupted);
         TestTrue(TEXT("真实GAS委托/query已经执行"), Calls > 0);
-        if (Case == TEXT("SecondQueryRejected")) { TestEqual(TEXT("第二个来源GE真实拒绝"), Calls, 2); }
+        if (Case == TEXT("DerivedQueryRejected")) { TestEqual(TEXT("汇总GE首次查询拒绝"), Calls, 1); }
     }
     else if (!Ok(TEXT("多来源真实暂存"), Stage)) { return false; }
     else
@@ -728,14 +868,15 @@ bool FY01R36MutationTest::RunTest(const FString& Case)
         {
             const auto* GE = F.ASC()->GetActiveGameplayEffect(H);
             if (TestNotNull(TEXT("提交前旧handle仍存在"), GE))
-            { TestEqual(TEXT("只抑制待移除来源"), GE->bIsInhibited, H != External && (!Ordered || GE->Spec.GetSetByCallerMagnitude(Y01Tags::Data_EquipmentAttack) != 16777216.f)); }
+            { TestEqual(TEXT("只抑制改变的汇总GE，外部GE不动"), GE->bIsInhibited, H != External && !Overflow); }
         }
-        if (Case == TEXT("LostOldStaged") || Case == TEXT("LostFirstNew") || Case == TEXT("LostSecondNew"))
+        if (Case == TEXT("LostOldStaged") || Case == TEXT("LostDerivedNew"))
         {
             auto Live = F.ASC()->GetActiveEffects(FGameplayEffectQuery());
             Live.RemoveAll([&](auto H) { return OldHandles.Contains(H); });
-            F.ASC()->RemoveActiveGameplayEffect(Case == TEXT("LostOldStaged") ? OldHandles.Last() : Live[Case == TEXT("LostFirstNew") ? 0 : 1]);
-            Code(TEXT("提交检查每一个handle"), F.S()->CommitMutation(Tx), EError::HandleLost);
+            if (!TestEqual(TEXT("暂存只有一个新汇总GE"), Live.Num(), 1)) { return false; }
+            F.ASC()->RemoveActiveGameplayEffect(Case == TEXT("LostOldStaged") ? OldHandles.Last() : Live[0]);
+            Code(TEXT("提交检查精确汇总handle"), F.S()->CommitMutation(Tx), EError::HandleLost);
             if (Case != TEXT("LostOldStaged")) { Restored(); }
             return true;
         }
@@ -805,8 +946,13 @@ bool FY01R36MutationTest::RunTest(const FString& Case)
         FY01SourceSnapshot After; Ok(TEXT("最终公开快照"), F.S()->Observe(After));
         TestEqual(TEXT("只递增一个revision"), After.Revision, Before.Revision + 1);
         TestEqual(TEXT("提交最终rate"), F.Income().State.Rate, 7.);
-        TestEqual(TEXT("两新GE无旧GE"), F.ASC()->GetActiveEffects(FGameplayEffectQuery()).Num(), 2);
-        for (auto H : OldHandles) { TestNull(TEXT("只有commit永久删除旧handle"), F.ASC()->GetActiveGameplayEffect(H)); }
+        TestEqual(TEXT("多逻辑来源只有一个汇总GE"), F.ASC()->GetActiveEffects(FGameplayEffectQuery()).Num(), 1);
+        TestEqual(TEXT("两新来源仍保留四条逻辑效果"), After.Effects.Num(), 4);
+        for (auto H : OldHandles)
+        {
+            if (Overflow) { TestNotNull(TEXT("攻击加值相同时保留原汇总handle"), F.ASC()->GetActiveGameplayEffect(H)); }
+            else { TestNull(TEXT("只有commit永久删除旧handle"), F.ASC()->GetActiveGameplayEffect(H)); }
+        }
         TestEqual(TEXT("最终真实攻击"), F.Attack(), Overflow ? OldCurrent : 50.f);
         F.Now = 2.25; Ok(TEXT("新段从stage捕获时刻计费"), F.I()->Settle()); TestEqual(TEXT("合法旧2.5与新7"), F.P->GetGold(), 9);
     }

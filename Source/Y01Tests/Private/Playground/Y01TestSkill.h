@@ -25,6 +25,7 @@ struct FY01TestAttackState
     UPROPERTY() double StartedAt = 0;
     UPROPERTY() double EndsAt = 0;
     UPROPERTY() float DamageSnapshot = 0;
+    UPROPERTY() bool bCritical = false; // 发射/放置时判定一次，命中沿用（bLifesteal 从Config读，不入状态）。
     UPROPERTY() bool bAutoAttack = false;
     UPROPERTY() float MeleeAngle = 0;
     UPROPERTY() TObjectPtr<AActor> SelectedTarget;

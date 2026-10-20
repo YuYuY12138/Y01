@@ -81,7 +81,7 @@ bool FY01R36FormalEntryTest::RunTest(const FString& Case)
     { TestTrue(TEXT("显式入口保留原Profile身份和名单"), Selected == DiskProfile); return true; }
     if (!TestNotNull(TEXT("默认不依赖Config/Profile"), Selected)) { AddError(Error); return false; }
     TestTrue(TEXT("已加载磁盘Content不能接管默认入口"), Selected != DiskProfile);
-    TestEqual(TEXT("默认固定24表"), Selected->Tables.Num(), 24);
+    TestEqual(TEXT("默认固定25表"), Selected->Tables.Num(), 25);
     for (const auto& Pair : Selected->Tables)
     { TestTrue(TEXT("所有表来自正式Data"), Pair.Value->GetPathName().StartsWith(TEXT("/Game/Y01Playground/Data/DT_"))); }
     return true;
@@ -190,7 +190,7 @@ bool FY01R36FormalSessionTest::RunTest(const FString& Case)
     World->BeginPlay();
     const auto* Profile = Cast<UY01R36Profile>(Mode->GetProfile());
     if (!TestNotNull(TEXT("正式入口持有瞬态R36配置"), Profile)) { return false; }
-    TestEqual(TEXT("正式24表"), Profile->Tables.Num(), 24);
+    TestEqual(TEXT("正式25表"), Profile->Tables.Num(), 25);
     TestTrue(TEXT("初始化无来源/经济错误"), Mode->GetLoadoutError().IsEmpty());
     FY01DataValidation Query;
     const auto* Rules = Profile->BuildCatalog().FindRow<FY01MatchRulesRow>({EY01TableKind::MatchRules, TEXT("Default")}, Query);
@@ -548,7 +548,7 @@ bool FY01R36TraceTest::RunTest(const FString& Case)
             V.TalentChoice.Candidates.AddDefaulted_GetRef().TalentId = TEXT("Talent"); V.SynthesisRecipes.AddDefaulted();
             Panel->Present(V, EY01MatchPhase::Preparing, 10);
             const auto UI = Parse(Y01R36Trace::PanelRecord(Panel));
-            for (const auto* Name : {TEXT("Purchase_0"), TEXT("Talent_0"), TEXT("MaterialMode"), TEXT("Synthesize"), TEXT("Training")})
+            for (const auto* Name : {TEXT("Purchase_0"), TEXT("Talent_0"), TEXT("Synthesize"), TEXT("Training")})
             {
                 const TSharedPtr<FJsonObject>* G = nullptr;
                 if (!TestTrue(TEXT("真实控件几何可观测"), UI->TryGetObjectField(Name, G))) { continue; }
@@ -561,10 +561,9 @@ bool FY01R36TraceTest::RunTest(const FString& Case)
             Panel->ToggleBackpack();
             TestTrue(TEXT("材料夹具只展开背包"), Panel->IsBackpackExpanded());
             TestFalse(TEXT("不连带打开人物或商店"), Panel->IsCharacterExpanded() || Panel->IsShopExpanded());
-            Panel->MaterialMode();
-            TestTrue(TEXT("材料模式实际面板状态"), Panel->IsSelectingMaterials());
-            const auto Selected = Parse(Y01R36Trace::PanelRecord(Panel)); bool Mode = false;
-            TestTrue(TEXT("材料模式真实状态"), Selected->TryGetBoolField(TEXT("selectingMaterials"), Mode) && Mode);
+            const auto After = Parse(Y01R36Trace::PanelRecord(Panel));
+            TestFalse(TEXT("自动选材后不再导出材料模式"), After->HasField(TEXT("selectingMaterials")));
+            TestTrue(TEXT("LOG可观测"), After->HasField(TEXT("gameLog")));
             return true;
         }
         if (Case == TEXT("UITree"))
@@ -584,7 +583,7 @@ bool FY01R36TraceTest::RunTest(const FString& Case)
             TestEqual(TEXT("无GS时钟未知"), UI->GetStringField(TEXT("waveClockSource")), FString(TEXT("Unknown")));
             for (const auto& Cell : *Cells)
             { TestTrue(TEXT("底槽始终可见"), Cell->AsObject()->GetBoolField(TEXT("visible"))); }
-            for (const auto* Name : {TEXT("ToggleCharacter"), TEXT("ToggleBackpack"), TEXT("ToggleShop"), TEXT("TopVitals"), TEXT("WaveCountdown"), TEXT("StatValue_IncomeRate")})
+            for (const auto* Name : {TEXT("ToggleCharacter"), TEXT("ToggleBackpack"), TEXT("ToggleShop"), TEXT("TopVitals"), TEXT("HealthBar"), TEXT("ShieldBar"), TEXT("WaveCountdown"), TEXT("StatValue_IncomeRate")})
             { TestTrue(TEXT("新控件契约存在"), UI->HasField(Name)); }
             TestFalse(TEXT("无旧手动下一波控件"), UI->HasField(TEXT("Advance")));
             auto* GS = World->SpawnActor<AY01GameState>(); World->SetGameState(GS);
@@ -755,14 +754,12 @@ bool FY01R36S3TraceTest::RunTest(const FString& Case)
     Layer->Present({Flight}); const auto J = Parse(Y01R36Trace::PanelRecord(Panel));
     double Unseen = -1; bool Enabled = false; const TArray<TSharedPtr<FJsonValue>>* Glyphs = nullptr;
     TestTrue(TEXT("未显示提示只读观测"), J->TryGetNumberField(TEXT("unseenArrivals"), Unseen)); TestEqual(TEXT("未布局不消费"), Unseen, 1.);
-    TestTrue(TEXT("本地飞行开关"), J->TryGetBoolField(TEXT("flightsEnabled"), Enabled) && Enabled);
+    TestFalse(TEXT("飞行常开，不再观测本地禁播开关"), J->TryGetBoolField(TEXT("flightsEnabled"), Enabled));
     TestTrue(TEXT("真实五图元而非模型条数"), J->TryGetArrayField(TEXT("flightGlyphs"), Glyphs) && Glyphs->Num() == 5);
     const TArray<TSharedPtr<FJsonValue>>* Cells = nullptr;
     if (J->TryGetArrayField(TEXT("cells"), Cells))
     { for (const auto& Cell : *Cells) { double Flash = -1; TestTrue(TEXT("每格闪烁剩余可采样"), Cell->AsObject()->TryGetNumberField(TEXT("flashRemaining"), Flash)); TestEqual(TEXT("非包格不闪"), Flash, 0.); } }
-    const TSharedPtr<FJsonObject>* Button = nullptr; TestTrue(TEXT("复用现有禁播按钮几何"), J->TryGetObjectField(TEXT("ToggleFlights"), Button));
-    Panel->ToggleFlights(); const auto Off = Parse(Y01R36Trace::PanelRecord(Panel));
-    TestTrue(TEXT("禁播后真实图元清空"), Off->TryGetArrayField(TEXT("flightGlyphs"), Glyphs) && Glyphs->IsEmpty());
-    TestEqual(TEXT("观测与禁播无库存副作用"), Panel->GetModel().View().Items.Num(), 1); return true;
+    TestFalse(TEXT("不再导出禁播按钮"), J->HasField(TEXT("ToggleFlights")));
+    TestEqual(TEXT("观测无库存副作用"), Panel->GetModel().View().Items.Num(), 1); return true;
 }
 #endif
